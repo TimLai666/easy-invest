@@ -1,0 +1,90 @@
+openapi: 3.1.0
+info:
+  title: Easy Invest API
+  version: 1.0.0
+servers:
+  - url: /api/v1
+paths:
+  /healthz:
+    get:
+      security: []
+      responses:
+        "200":
+          description: OK
+  /version:
+    get:
+      security: []
+      responses:
+        "200":
+          description: Version
+  /auth/register:
+    post:
+      security: []
+      responses:
+        "201":
+          description: Registered
+  /auth/login:
+    post:
+      security: []
+      responses:
+        "200":
+          description: Logged in
+  /me:
+    get:
+      responses:
+        "200":
+          description: Current user
+  /api-keys:
+    get:
+      responses:
+        "200":
+          description: List API keys
+    post:
+      responses:
+        "201":
+          description: Create API key
+  /assets:
+    get:
+      responses:
+        "200":
+          description: Search assets
+  /ledger/events:
+    post:
+      responses:
+        "201":
+          description: Create ledger event
+    get:
+      responses:
+        "200":
+          description: List ledger events
+  /portfolio:
+    get:
+      responses:
+        "200":
+          description: Current portfolio
+  /recommendations/runs:
+    post:
+      responses:
+        "201":
+          description: Run recommendations
+    get:
+      responses:
+        "200":
+          description: List recommendation runs
+  /settings:
+    get:
+      responses:
+        "200":
+          description: Get settings
+    put:
+      responses:
+        "200":
+          description: Update settings
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+security:
+  - bearerAuth: []
+

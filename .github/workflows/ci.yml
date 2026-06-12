@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: easy_invest
+          POSTGRES_USER: easy_invest
+          POSTGRES_PASSWORD: easy_invest
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U easy_invest -d easy_invest"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://easy_invest:easy_invest@localhost:5432/easy_invest?sslmode=disable
+      APP_SECRET: ci-secret-at-least-32-bytes-long
+      ENABLE_REGISTRATION: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go run ./cmd/migrate up
+      - run: go run ./cmd/server & sleep 5 && curl --fail http://localhost:8080/healthz

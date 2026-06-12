@@ -1,0 +1,24 @@
+DROP TABLE IF EXISTS idempotency_keys;
+DROP TABLE IF EXISTS audit_log;
+DROP TABLE IF EXISTS reconciliation_diffs;
+DROP TABLE IF EXISTS reconciliation_runs;
+DROP TABLE IF EXISTS broker_positions;
+DROP TABLE IF EXISTS broker_snapshots;
+DROP TABLE IF EXISTS recommendation_items;
+DROP TABLE IF EXISTS recommendation_runs;
+DROP TABLE IF EXISTS strategy_versions;
+DROP TABLE IF EXISTS user_settings;
+DROP TABLE IF EXISTS portfolio_snapshots;
+DROP TABLE IF EXISTS lot_consumptions;
+DROP TABLE IF EXISTS lots;
+DROP TABLE IF EXISTS ledger_events;
+DROP TABLE IF EXISTS trading_calendar;
+DROP TABLE IF EXISTS corporate_actions;
+DROP TABLE IF EXISTS market_daily_bars;
+DROP TABLE IF EXISTS ingestion_runs;
+DROP TABLE IF EXISTS assets;
+DROP TABLE IF EXISTS api_keys;
+DROP TABLE IF EXISTS users;
+DROP EXTENSION IF EXISTS citext;
+DROP EXTENSION IF EXISTS pgcrypto;
+
