@@ -4,6 +4,7 @@
 	import '@fontsource-variable/jetbrains-mono';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from '$lib/components/ui/sonner';
+	import NavProgress from '$lib/components/app/nav-progress.svelte';
 
 	let { children } = $props();
 </script>
@@ -15,4 +16,5 @@
 
 <ModeWatcher />
 <Toaster />
+<NavProgress />
 {@render children()}

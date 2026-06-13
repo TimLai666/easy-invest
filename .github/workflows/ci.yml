@@ -23,6 +23,7 @@ jobs:
           --health-retries 20
     env:
       DATABASE_URL: postgres://easy_invest:easy_invest@localhost:5432/easy_invest?sslmode=disable
+      TEST_DATABASE_URL: postgres://easy_invest:easy_invest@localhost:5432/easy_invest?sslmode=disable
       APP_SECRET: ci-secret-at-least-32-bytes-long
       ENABLE_REGISTRATION: "true"
     steps:
@@ -36,3 +37,20 @@ jobs:
       - run: go test ./...
       - run: go run ./cmd/migrate up
       - run: go run ./cmd/server & sleep 5 && curl --fail http://localhost:8080/healthz
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm run lint
+      - run: npm run build
