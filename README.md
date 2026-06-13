@@ -94,3 +94,15 @@ docker compose config
 ```
 
 `verify-marketdata` 會直接連官方 TWSE/TPEx API，預設每次請求間隔 4 秒，避免驗證時對來源造成壓力。
+
+市場資料入庫驗證（真實官方資料 → PostgreSQL → freshness / 樣本查詢）：
+
+```bash
+docker compose up -d postgres
+docker build --build-arg CMD=marketdata-live-check -t easy-invest-marketdata-live-check .
+docker run --rm --network easy-invest_default \
+  -e DATABASE_URL=postgres://easy_invest:easy_invest@postgres:5432/easy_invest?sslmode=disable \
+  easy-invest-marketdata-live-check -backfill-months=2 -request-interval=4s
+```
+
+`marketdata-live-check` 會套用 migration、同步上市櫃資產清單、執行 catch-up、額外抽查 TWSE 0050 與 TPEx 006201 的歷史月回補，最後輸出資料表筆數、樣本行情與 `/market/freshness` 同一套資料。它同樣預設每次官方請求至少間隔 4 秒。

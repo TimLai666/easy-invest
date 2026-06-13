@@ -36,16 +36,16 @@ type twseDailyAllRow struct {
 // tpexDailyRow 是 TPEx OpenAPI 上櫃日收盤行情的單列格式。
 // 實測（2026-06-12）：Date 同為民國年緊湊格式，當日約 14:00 後可取得。
 type tpexDailyRow struct {
-	Date               string `json:"Date"`
-	Code               string `json:"SecuritiesCompanyCode"`
-	Name               string `json:"CompanyName"`
-	Close              string `json:"Close"`
-	Open               string `json:"Open"`
-	High               string `json:"High"`
-	Low                string `json:"Low"`
-	TradingShares      string `json:"TradingShares"`
-	TransactionAmount  string `json:"TransactionAmount"`
-	TransactionNumber  string `json:"TransactionNumber"`
+	Date              string `json:"Date"`
+	Code              string `json:"SecuritiesCompanyCode"`
+	Name              string `json:"CompanyName"`
+	Close             string `json:"Close"`
+	Open              string `json:"Open"`
+	High              string `json:"High"`
+	Low               string `json:"Low"`
+	TradingShares     string `json:"TradingShares"`
+	TransactionAmount string `json:"TransactionAmount"`
+	TransactionNumber string `json:"TransactionNumber"`
 }
 
 // dailyBarRow 是各來源解析後的標準化日 K 列。
@@ -314,7 +314,9 @@ func upsertAsset(ctx context.Context, tx pgx.Tx, market, symbol, name string) (s
 		INSERT INTO assets (asset_type, symbol, name, market, currency, lot_size)
 		VALUES ($1, $2, $3, $4, 'TWD', 1000)
 		ON CONFLICT (market, symbol)
-		DO UPDATE SET name = EXCLUDED.name, asset_type = EXCLUDED.asset_type, is_active = true
+		DO UPDATE SET name = CASE WHEN EXCLUDED.name <> '' THEN EXCLUDED.name ELSE assets.name END,
+		              asset_type = EXCLUDED.asset_type,
+		              is_active = true
 		RETURNING id::text
 	`, assetType, symbol, name, market).Scan(&id)
 	return id, err
