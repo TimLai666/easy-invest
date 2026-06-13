@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tingz/easy-invest/internal/auth"
+	"github.com/tingz/easy-invest/internal/backtest"
 	"github.com/tingz/easy-invest/internal/config"
 	"github.com/tingz/easy-invest/internal/ledger"
 	"github.com/tingz/easy-invest/internal/marketdata"
@@ -28,6 +29,7 @@ type Server struct {
 	market    *marketdata.Service
 	recommend *recommend.Service
 	reconcile *reconcile.Service
+	backtest  *backtest.Service
 }
 
 func NewServer(cfg config.Config, db *pgxpool.Pool, log *slog.Logger) *Server {
@@ -42,6 +44,7 @@ func NewServer(cfg config.Config, db *pgxpool.Pool, log *slog.Logger) *Server {
 		market:    marketSvc,
 		recommend: recommend.NewService(db, ledgerSvc, marketSvc),
 		reconcile: reconcile.NewService(db, ledgerSvc),
+		backtest:  backtest.NewService(db),
 	}
 }
 
@@ -93,13 +96,17 @@ func (s *Server) Routes() http.Handler {
 			r.Post("/recommendations/runs", s.requireScopes("recommendations:run")(s.handleCreateRecommendationRun))
 			r.Get("/recommendations/runs", s.requireScopes("recommendations:read")(s.handleListRecommendationRuns))
 			r.Get("/recommendations/runs/{id}", s.requireScopes("recommendations:read")(s.handleGetRecommendationRun))
-			r.Patch("/recommendations/items/{id}", s.requireScopes("recommendations:read")(s.handlePatchRecommendationItem))
+			r.Patch("/recommendations/items/{id}", s.requireScopes("recommendations:read", "recommendations:run")(s.handlePatchRecommendationItem))
 
 			r.Post("/reconciliation/broker-snapshots", s.requireScopes("reconciliation:write")(s.handleCreateBrokerSnapshot))
-			r.Get("/reconciliation/broker-snapshots", s.requireScopes("reconciliation:write")(s.handleListBrokerSnapshots))
+			r.Get("/reconciliation/broker-snapshots", s.requireScopes("reconciliation:read")(s.handleListBrokerSnapshots))
 			r.Post("/reconciliation/runs", s.requireScopes("reconciliation:write")(s.handleCreateReconciliationRun))
-			r.Get("/reconciliation/runs/{id}", s.requireScopes("reconciliation:write")(s.handleGetReconciliationRun))
+			r.Get("/reconciliation/runs/{id}", s.requireScopes("reconciliation:read")(s.handleGetReconciliationRun))
 			r.Post("/reconciliation/diffs/{id}/resolve", s.requireScopes("reconciliation:write")(s.handleResolveReconciliationDiff))
+
+			r.Post("/backtests/runs", s.requireScopes("backtests:run")(s.handleCreateBacktestRun))
+			r.Get("/backtests/runs", s.requireScopes("backtests:read")(s.handleListBacktestRuns))
+			r.Get("/backtests/runs/{id}", s.requireScopes("backtests:read")(s.handleGetBacktestRun))
 		})
 	})
 	return r

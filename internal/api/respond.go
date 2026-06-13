@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 )
 
@@ -40,11 +41,25 @@ func writeError(w http.ResponseWriter, status int, code, message string, details
 func decodeJSON(r *http.Request, dst any) error {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
+	dec.UseNumber()
 	if err := dec.Decode(dst); err != nil {
 		return err
 	}
-	if dec.More() {
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		if err != nil {
+			return err
+		}
 		return errors.New("body must contain a single JSON value")
+	}
+	return nil
+}
+
+func decodeOptionalJSON(r *http.Request, dst any) error {
+	if r.Body == nil || r.Body == http.NoBody || r.ContentLength == 0 {
+		return nil
+	}
+	if err := decodeJSON(r, dst); err != nil && !errors.Is(err, io.EOF) {
+		return err
 	}
 	return nil
 }

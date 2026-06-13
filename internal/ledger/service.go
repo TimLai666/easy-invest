@@ -222,15 +222,25 @@ func (s *Service) prepareEvent(ctx context.Context, input CreateEventInput) (pre
 
 	price := num.Parse(input.Price)
 	quantityAbs := decimal.Zero
+	quantityNegative := false
 	if input.Quantity != "" {
 		if asset == nil && input.Unit == twmarket.UnitLot {
 			return preparedEvent{}, fmt.Errorf("%w: lot unit requires asset", ErrValidation)
+		}
+		raw := num.Parse(input.Quantity)
+		if raw.IsNegative() {
+			// 只有調整事件允許負股數（FIFO 沖銷）；其他事件型別的方向由 event_type 決定
+			if !IsAdjustmentEvent(input.EventType) {
+				return preparedEvent{}, fmt.Errorf("%w: 此事件型別的 quantity 必須為正數", ErrValidation)
+			}
+			quantityNegative = true
+			raw = raw.Abs()
 		}
 		lotSize := 1
 		if asset != nil {
 			lotSize = asset.LotSize
 		}
-		q, err := twmarket.Shares(num.Parse(input.Quantity), input.Unit, lotSize)
+		q, err := twmarket.Shares(raw, input.Unit, lotSize)
 		if err != nil {
 			return preparedEvent{}, fmt.Errorf("%w: %v", ErrValidation, err)
 		}
@@ -309,6 +319,67 @@ func (s *Service) prepareEvent(ctx context.Context, input CreateEventInput) (pre
 		}
 		quantity = quantityAbs.Neg()
 		cashDelta = gross.Sub(fee).Sub(tax)
+	case EventSplit:
+		// 股票分割／反分割：比率放 metadata.split_ratio（新股數/舊股數），
+		// 股數變化由系統依未平倉持股計算，不收使用者輸入的 quantity。
+		if asset == nil {
+			return preparedEvent{}, fmt.Errorf("%w: split 需要 symbol", ErrValidation)
+		}
+		if input.Quantity != "" {
+			return preparedEvent{}, fmt.Errorf("%w: split 的股數由系統依分割比例計算，請勿輸入 quantity", ErrValidation)
+		}
+		ratio, ok, err := metadataDecimal(input.Metadata, MetaSplitRatio)
+		if err != nil {
+			return preparedEvent{}, err
+		}
+		if !ok {
+			return preparedEvent{}, fmt.Errorf("%w: split 需要 metadata.split_ratio（新股數/舊股數）", ErrValidation)
+		}
+		if ratio.LessThanOrEqual(decimal.Zero) || ratio.Equal(decimal.NewFromInt(1)) {
+			return preparedEvent{}, fmt.Errorf("%w: split_ratio 必須為正數且不等於 1", ErrValidation)
+		}
+		total, err := s.totalRemainingShares(ctx, input.UserID, asset.ID)
+		if err != nil {
+			return preparedEvent{}, err
+		}
+		if total.LessThanOrEqual(decimal.Zero) {
+			return preparedEvent{}, fmt.Errorf("%w: split 需要該資產尚有未平倉批次", ErrValidation)
+		}
+		// quantity_shares 記建立當下的淨增股數（反分割為負），僅供顯示；
+		// rebuild 一律以 metadata.split_ratio 對當時批次重算，不依賴這個欄位。
+		quantity = total.Mul(ratio).Sub(total)
+		// 分割不動現金、不收費稅；反分割畸零股找零另記現金事件
+		fee = decimal.Zero
+		tax = decimal.Zero
+		cashDelta = decimal.Zero
+	case EventFeeAdjustment, EventTaxAdjustment, EventBrokerReconciliationAdjustment, EventManualCorrection:
+		// 調整事件三種作用（語意詳見 types.go metadata 常數說明）：
+		// 1. 純現金調整：metadata.cash_delta（有號）優先，未提供退回 gross − fee − tax。
+		// 2. 股數調整：quantity 正=補股（metadata.unit_cost 每股成本，預設 0）、
+		//    負=FIFO 沖銷且 realized_pnl 記 0。
+		// 3. 成本調整：metadata.adjusted_cost_delta 只動批次 adjusted_cost。
+		if quantityAbs.GreaterThan(decimal.Zero) && asset == nil {
+			return preparedEvent{}, fmt.Errorf("%w: 帶股數的調整事件需要 symbol", ErrValidation)
+		}
+		if quantityNegative {
+			quantity = quantityAbs.Neg()
+		}
+		// 提前驗證 metadata 數字格式，避免事件寫入後才在批次計算時失敗
+		if _, _, err := metadataDecimal(input.Metadata, MetaUnitCost); err != nil {
+			return preparedEvent{}, err
+		}
+		if _, hasCostDelta, err := metadataDecimal(input.Metadata, MetaAdjustedCostDelta); err != nil {
+			return preparedEvent{}, err
+		} else if hasCostDelta && asset == nil {
+			return preparedEvent{}, fmt.Errorf("%w: 帶 adjusted_cost_delta 的調整事件需要 symbol", ErrValidation)
+		}
+		if cd, hasCashDelta, err := metadataDecimal(input.Metadata, MetaCashDelta); err != nil {
+			return preparedEvent{}, err
+		} else if hasCashDelta {
+			cashDelta = cd
+		} else {
+			cashDelta = gross.Sub(fee).Sub(tax)
+		}
 	default:
 		cashDelta = gross.Sub(fee).Sub(tax)
 	}
@@ -402,80 +473,239 @@ func (s *Service) applyEventToLots(ctx context.Context, tx pgx.Tx, event prepare
 	}
 	switch event.EventType {
 	case EventBuy, EventStockDividend:
+		// stock_dividend 依 docs/tw-market-rules.md 建零成本批次：
+		// original_cost 與 adjusted_cost 都是 0，調整後成本視角靠
+		// 「股數變多、總成本不變」自然稀釋平均成本，不需額外動作。
 		if event.QuantityAbs.LessThanOrEqual(decimal.Zero) {
 			return nil
 		}
-		_, err := tx.Exec(ctx, `
-			INSERT INTO lots (user_id, asset_id, opened_by_event_id, open_date, original_quantity, remaining_quantity, original_cost, adjusted_cost)
-			VALUES ($1, $2, $3, $4::date, $5::numeric, $5::numeric, $6::numeric, $6::numeric)
-		`, event.UserID, event.Asset.ID, event.ID, event.TradeDate, event.QuantityAbs.String(), event.OriginalCost.String())
-		return err
-	case EventSell, EventCapitalReduction:
-		if event.QuantityAbs.LessThanOrEqual(decimal.Zero) {
+		return s.insertLotTx(ctx, tx, event, event.OriginalCost)
+	case EventSell:
+		lots, err := s.openLotStatesTx(ctx, tx, event.UserID, event.Asset.ID)
+		if err != nil {
+			return err
+		}
+		netProceeds := event.Gross.Sub(event.Fee).Sub(event.Tax)
+		consumptions, err := consumeLotsFIFO(lots, event.QuantityAbs, netProceeds)
+		if err != nil {
+			return err
+		}
+		if err := s.insertConsumptionsTx(ctx, tx, event.ID, consumptions); err != nil {
+			return err
+		}
+		return s.saveLotStatesTx(ctx, tx, event.UserID, lots)
+	case EventCapitalReduction:
+		// 減資：股數縮減沿用 FIFO 沖銷（original_cost 視角，既有邏輯不動）；
+		// 退還淨現金另外按比例扣存續批次的 adjusted_cost（券商 App「退錢降成本」視角）。
+		// 注意：FIFO 沖銷已按 remaining/original 比例帶走部分調整後成本，
+		// 與部分券商的減資成本算法可能有差異，差額用對帳調整事件吸收。
+		lots, err := s.openLotStatesTx(ctx, tx, event.UserID, event.Asset.ID)
+		if err != nil {
+			return err
+		}
+		if event.QuantityAbs.GreaterThan(decimal.Zero) {
+			netProceeds := event.Gross.Sub(event.Fee).Sub(event.Tax)
+			consumptions, err := consumeLotsFIFO(lots, event.QuantityAbs, netProceeds)
+			if err != nil {
+				return err
+			}
+			if err := s.insertConsumptionsTx(ctx, tx, event.ID, consumptions); err != nil {
+				return err
+			}
+		}
+		if event.CashDelta.GreaterThan(decimal.Zero) {
+			deductAdjustedCostProRata(lots, event.CashDelta)
+		}
+		return s.saveLotStatesTx(ctx, tx, event.UserID, lots)
+	case EventCashDividend:
+		// 除息：實收股利（gross − 匯費 − 健保補充保費）按未平倉股數比例
+		// 從各批次 adjusted_cost 扣除（券商 App「領息扣成本」視角）；original_cost 不動。
+		if event.CashDelta.LessThanOrEqual(decimal.Zero) {
 			return nil
 		}
-		return s.consumeFIFO(ctx, tx, event)
+		lots, err := s.openLotStatesTx(ctx, tx, event.UserID, event.Asset.ID)
+		if err != nil {
+			return err
+		}
+		deductAdjustedCostProRata(lots, event.CashDelta)
+		return s.saveLotStatesTx(ctx, tx, event.UserID, lots)
+	case EventSplit:
+		ratio, ok, err := metadataDecimal(event.Metadata, MetaSplitRatio)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("%w: split 需要 metadata.split_ratio（新股數/舊股數）", ErrValidation)
+		}
+		lots, err := s.openLotStatesTx(ctx, tx, event.UserID, event.Asset.ID)
+		if err != nil {
+			return err
+		}
+		// rebuild 時若分割前的買進已被 void、沒有未平倉批次，分割就是無作用事件
+		if _, err := applySplitToLots(lots, ratio); err != nil {
+			return err
+		}
+		return s.saveLotStatesTx(ctx, tx, event.UserID, lots)
+	case EventFeeAdjustment, EventTaxAdjustment, EventBrokerReconciliationAdjustment, EventManualCorrection:
+		return s.applyAdjustmentToLots(ctx, tx, event)
 	default:
 		return nil
 	}
 }
 
-func (s *Service) consumeFIFO(ctx context.Context, tx pgx.Tx, event preparedEvent) error {
-	rows, err := tx.Query(ctx, `
-		SELECT id::text, remaining_quantity::text, original_quantity::text, original_cost::text
-		FROM lots
-		WHERE user_id = $1 AND asset_id = $2 AND remaining_quantity > 0
-		ORDER BY open_date, created_at
-		FOR UPDATE
-	`, event.UserID, event.Asset.ID)
+// applyAdjustmentToLots 處理調整事件對批次的影響。
+// 三種作用的語意詳見 types.go 的 metadata 常數說明；純現金調整不會進到這裡
+//（無 symbol 時 applyEventToLots 直接略過，現金影響已寫在事件 cash_delta）。
+func (s *Service) applyAdjustmentToLots(ctx context.Context, tx pgx.Tx, event preparedEvent) error {
+	if event.QuantityAbs.GreaterThan(decimal.Zero) {
+		unitCost, hasUnitCost, err := metadataDecimal(event.Metadata, MetaUnitCost)
+		if err != nil {
+			return err
+		}
+		if event.Quantity.IsNegative() {
+			// 股數調整（負）：按 FIFO 沖銷，realized_pnl 記 0（調整不認列損益）
+			lots, err := s.openLotStatesTx(ctx, tx, event.UserID, event.Asset.ID)
+			if err != nil {
+				return err
+			}
+			var unitCostPtr *decimal.Decimal
+			if hasUnitCost {
+				unitCostPtr = &unitCost
+			}
+			consumptions, err := consumeLotsForAdjustment(lots, event.QuantityAbs, unitCostPtr)
+			if err != nil {
+				return err
+			}
+			if err := s.insertConsumptionsTx(ctx, tx, event.ID, consumptions); err != nil {
+				return err
+			}
+			if err := s.saveLotStatesTx(ctx, tx, event.UserID, lots); err != nil {
+				return err
+			}
+		} else {
+			// 股數調整（正）：補股，建立新批次；unit_cost 未提供視為零成本補股
+			cost := decimal.Zero
+			if hasUnitCost {
+				cost = unitCost.Mul(event.QuantityAbs)
+			}
+			if err := s.insertLotTx(ctx, tx, event, cost); err != nil {
+				return err
+			}
+		}
+	}
+	delta, ok, err := metadataDecimal(event.Metadata, MetaAdjustedCostDelta)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-
-	remaining := event.QuantityAbs
-	for rows.Next() {
-		if remaining.LessThanOrEqual(decimal.Zero) {
-			break
-		}
-		var lotID, remainingText, originalQtyText, originalCostText string
-		if err := rows.Scan(&lotID, &remainingText, &originalQtyText, &originalCostText); err != nil {
+	if ok && !delta.IsZero() {
+		// 成本調整：只動 adjusted_cost；delta 正=調整後成本增加。
+		// 重新載入批次，讓同一筆事件剛補的股也吃得到成本調整。
+		lots, err := s.openLotStatesTx(ctx, tx, event.UserID, event.Asset.ID)
+		if err != nil {
 			return err
 		}
-		lotRemaining := num.Parse(remainingText)
-		originalQty := num.Parse(originalQtyText)
-		originalCost := num.Parse(originalCostText)
-		consume := decimal.Min(remaining, lotRemaining)
-		costConsumed := originalCost.Mul(consume).Div(originalQty)
-		netProceedsPart := event.Gross.Sub(event.Fee).Sub(event.Tax).Mul(consume).Div(event.QuantityAbs)
-		realized := netProceedsPart.Sub(costConsumed)
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO lot_consumptions (lot_id, consumed_by_event_id, quantity, cost_consumed, realized_pnl)
-			VALUES ($1, $2, $3::numeric, $4::numeric, $5::numeric)
-		`, lotID, event.ID, consume.String(), costConsumed.String(), realized.String()); err != nil {
-			return err
-		}
-		newRemaining := lotRemaining.Sub(consume)
-		closedExpr := "NULL"
-		if newRemaining.LessThanOrEqual(decimal.Zero) {
-			closedExpr = "now()"
-		}
-		if _, err := tx.Exec(ctx, fmt.Sprintf(`
-			UPDATE lots SET remaining_quantity = $2::numeric, closed_at = %s WHERE id = $1
-		`, closedExpr), lotID, newRemaining.String()); err != nil {
-			return err
-		}
-		remaining = remaining.Sub(consume)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if remaining.GreaterThan(decimal.Zero) {
-		return ErrInsufficientShares
+		deductAdjustedCostProRata(lots, delta.Neg())
+		return s.saveLotStatesTx(ctx, tx, event.UserID, lots)
 	}
 	return nil
 }
 
+// insertLotTx 建立新批次；adjusted_cost 與 original_cost 同值起算，
+// 之後只有 adjusted_cost 會被公司行動與調整事件改動。
+func (s *Service) insertLotTx(ctx context.Context, tx pgx.Tx, event preparedEvent, cost decimal.Decimal) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO lots (user_id, asset_id, opened_by_event_id, open_date, original_quantity, remaining_quantity, original_cost, adjusted_cost)
+		VALUES ($1, $2, $3, $4::date, $5::numeric, $5::numeric, $6::numeric, $6::numeric)
+	`, event.UserID, event.Asset.ID, event.ID, event.TradeDate, event.QuantityAbs.String(), cost.String())
+	return err
+}
+
+// openLotStatesTx 把某資產的未平倉批次依 FIFO 順序載入記憶體，並鎖列避免並發改動。
+// 排序鍵用「開倉事件」的建立時間而不是 lots.created_at：
+// rebuild 會在同一交易內重建所有批次，lots.created_at 全部相同，無法保證順序；
+// 事件的 created_at 在 void/rebuild 後仍然不變，FIFO 順序因此是確定的。
+func (s *Service) openLotStatesTx(ctx context.Context, tx pgx.Tx, userID, assetID string) ([]*lotState, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT l.id::text, l.opened_by_event_id::text, l.open_date::text,
+		       l.original_quantity::text, l.remaining_quantity::text,
+		       l.original_cost::text, l.adjusted_cost::text
+		FROM lots l
+		JOIN ledger_events e ON e.id = l.opened_by_event_id
+		WHERE l.user_id = $1 AND l.asset_id = $2 AND l.remaining_quantity > 0
+		ORDER BY l.open_date, e.created_at, e.id
+		FOR UPDATE OF l
+	`, userID, assetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var lots []*lotState
+	for rows.Next() {
+		var lot lotState
+		var originalQty, remainingQty, originalCost, adjustedCost string
+		if err := rows.Scan(&lot.ID, &lot.OpenedByEventID, &lot.OpenDate, &originalQty, &remainingQty, &originalCost, &adjustedCost); err != nil {
+			return nil, err
+		}
+		lot.OriginalQuantity = num.Parse(originalQty)
+		lot.RemainingQuantity = num.Parse(remainingQty)
+		lot.OriginalCost = num.Parse(originalCost)
+		lot.AdjustedCost = num.Parse(adjustedCost)
+		lots = append(lots, &lot)
+	}
+	return lots, rows.Err()
+}
+
+// saveLotStatesTx 把引擎改過（Dirty）的批次寫回；remaining 歸零時標記平倉。
+func (s *Service) saveLotStatesTx(ctx context.Context, tx pgx.Tx, userID string, lots []*lotState) error {
+	for _, lot := range lots {
+		if !lot.Dirty {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE lots
+			SET original_quantity = $3::numeric,
+			    remaining_quantity = $4::numeric,
+			    adjusted_cost = $5::numeric,
+			    closed_at = CASE WHEN $4::numeric <= 0 THEN COALESCE(closed_at, now()) ELSE NULL END
+			WHERE id = $1 AND user_id = $2
+		`, lot.ID, userID, lot.OriginalQuantity.String(), lot.RemainingQuantity.String(), lot.AdjustedCost.String()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// insertConsumptionsTx 寫入沖銷明細（lot_consumptions）。
+func (s *Service) insertConsumptionsTx(ctx context.Context, tx pgx.Tx, eventID string, consumptions []lotConsumption) error {
+	for _, c := range consumptions {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO lot_consumptions (lot_id, consumed_by_event_id, quantity, cost_consumed, realized_pnl)
+			VALUES ($1, $2, $3::numeric, $4::numeric, $5::numeric)
+		`, c.LotID, eventID, c.Quantity.String(), c.CostConsumed.String(), c.RealizedPnL.String()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// totalRemainingShares 回傳使用者某資產目前的未平倉股數合計。
+func (s *Service) totalRemainingShares(ctx context.Context, userID, assetID string) (decimal.Decimal, error) {
+	var text string
+	err := s.db.QueryRow(ctx, `
+		SELECT COALESCE(sum(remaining_quantity), 0)::text
+		FROM lots
+		WHERE user_id = $1 AND asset_id = $2 AND remaining_quantity > 0
+	`, userID, assetID).Scan(&text)
+	if err != nil {
+		return decimal.Zero, err
+	}
+	return num.Parse(text), nil
+}
+
+// rebuildLotsTx 把使用者所有批次與沖銷明細砍掉，依未作廢事件流全量重放。
+// 重放順序 = trade_date、created_at、id，與事件當初套用的順序一致；
+// split 以 metadata.split_ratio 重算、cash_dividend 與減資退現以事件 cash_delta 重扣
+// adjusted_cost、調整事件依 metadata 重放，因此 adjusted_cost 永遠可以從事件流完整重建。
 func (s *Service) rebuildLotsTx(ctx context.Context, tx pgx.Tx, userID string) error {
 	_, err := tx.Exec(ctx, `
 		DELETE FROM lot_consumptions

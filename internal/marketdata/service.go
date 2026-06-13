@@ -194,39 +194,6 @@ func (s *Service) LatestPriceForAsset(ctx context.Context, assetID string) (Late
 	return price, nil
 }
 
-func (s *Service) Freshness(ctx context.Context) ([]map[string]any, error) {
-	rows, err := s.db.Query(ctx, `
-		SELECT dataset,
-		       max(data_time)::text AS latest_data_time,
-		       max(fetched_at)::text AS latest_fetched_at,
-		       (array_agg(source_name ORDER BY fetched_at DESC))[1] AS source_name,
-		       (array_agg(status ORDER BY fetched_at DESC))[1] AS status
-		FROM ingestion_runs
-		GROUP BY dataset
-		ORDER BY dataset
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []map[string]any
-	for rows.Next() {
-		var dataset, source, status string
-		var dataTime, fetchedAt sql.NullString
-		if err := rows.Scan(&dataset, &dataTime, &fetchedAt, &source, &status); err != nil {
-			return nil, err
-		}
-		items = append(items, map[string]any{
-			"dataset":           dataset,
-			"latest_data_time":  dataTime.String,
-			"latest_fetched_at": fetchedAt.String,
-			"source_name":       source,
-			"status":            status,
-		})
-	}
-	return items, rows.Err()
-}
-
 func IsNotFound(err error) bool {
 	return errors.Is(err, pgx.ErrNoRows)
 }

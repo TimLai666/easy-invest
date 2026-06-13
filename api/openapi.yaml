@@ -2,89 +2,1040 @@ openapi: 3.1.0
 info:
   title: Easy Invest API
   version: 1.0.0
+  description: 台股投資建議系統 API。所有金額與數量以字串傳遞，避免浮點誤差。
 servers:
   - url: /api/v1
+security:
+  - bearerAuth: []
+  - sessionCookie: []
+tags:
+  - name: system
+  - name: auth
+  - name: api-keys
+  - name: market
+  - name: ledger
+  - name: recommendations
+  - name: reconciliation
+  - name: backtests
+  - name: settings
 paths:
   /healthz:
     get:
+      tags: [system]
       security: []
       responses:
         "200":
-          description: OK
+          description: 系統健康狀態
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
   /version:
     get:
+      tags: [system]
       security: []
       responses:
         "200":
-          description: Version
+          description: 版本資訊
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version:
+                    type: string
+                required: [version]
   /auth/register:
     post:
+      tags: [auth]
       security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
       responses:
         "201":
-          description: Registered
+          description: 已註冊
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
   /auth/login:
     post:
+      tags: [auth]
       security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
       responses:
         "200":
-          description: Logged in
+          description: 已登入並設定 session cookie
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Error"
+  /auth/logout:
+    post:
+      tags: [auth]
+      responses:
+        "204":
+          description: 已登出
   /me:
     get:
+      tags: [auth]
       responses:
         "200":
-          description: Current user
+          description: 目前使用者
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: "#/components/schemas/User"
+                  auth_via:
+                    type: string
+                  scopes:
+                    type: array
+                    items:
+                      type: string
+                required: [user, auth_via, scopes]
+        "401":
+          $ref: "#/components/responses/Error"
   /api-keys:
     get:
+      tags: [api-keys]
+      description: 只接受 session 認證。
       responses:
         "200":
-          description: List API keys
+          description: API key 清單
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/APIKey"
+                required: [items]
     post:
+      tags: [api-keys]
+      description: 只接受 session 認證，完整 key 只在建立當下回傳一次。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAPIKeyRequest"
       responses:
         "201":
-          description: Create API key
+          description: 已建立 API key
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIKey"
+                  - type: object
+                    properties:
+                      plaintext:
+                        type: string
+                    required: [plaintext]
+        "400":
+          $ref: "#/components/responses/Error"
+  /api-keys/{id}/revoke:
+    post:
+      tags: [api-keys]
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "204":
+          description: 已撤銷
+        "404":
+          $ref: "#/components/responses/Error"
+  /api-keys/{id}/rotate:
+    post:
+      tags: [api-keys]
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "201":
+          description: 已輪替
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIKey"
+                  - type: object
+                    properties:
+                      plaintext:
+                        type: string
+                    required: [plaintext]
+        "404":
+          $ref: "#/components/responses/Error"
   /assets:
     get:
+      tags: [market]
+      x-required-scopes: [market:read]
+      parameters:
+        - name: query
+          in: query
+          schema:
+            type: string
+        - name: type
+          in: query
+          schema:
+            type: string
       responses:
         "200":
-          description: Search assets
+          description: 資產清單
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Asset"
+                required: [items]
+  /assets/{id}:
+    get:
+      tags: [market]
+      x-required-scopes: [market:read]
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: 資產
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Asset"
+        "404":
+          $ref: "#/components/responses/Error"
+  /market/bars:
+    get:
+      tags: [market]
+      x-required-scopes: [market:read]
+      parameters:
+        - name: symbol
+          in: query
+          schema:
+            type: string
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: 日 K
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MarketBar"
+                required: [items]
+  /market/corporate-actions:
+    get:
+      tags: [market]
+      x-required-scopes: [market:read]
+      responses:
+        "200":
+          description: 公司行動
+  /market/calendar:
+    get:
+      tags: [market]
+      x-required-scopes: [market:read]
+      responses:
+        "200":
+          description: 交易日曆
+  /market/freshness:
+    get:
+      tags: [market]
+      x-required-scopes: [market:read]
+      responses:
+        "200":
+          description: 資料新鮮度
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/FreshnessItem"
+                required: [items]
   /ledger/events:
     post:
+      tags: [ledger]
+      x-required-scopes: [ledger:write]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLedgerEventRequest"
       responses:
         "201":
-          description: Create ledger event
+          description: 已建立事件
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LedgerEvent"
+        "400":
+          $ref: "#/components/responses/Error"
     get:
+      tags: [ledger]
+      x-required-scopes: [ledger:read]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - name: asset
+          in: query
+          schema:
+            type: string
+        - name: type
+          in: query
+          schema:
+            type: string
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date
       responses:
         "200":
-          description: List ledger events
+          description: 事件清單
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/LedgerEvent"
+                  next_cursor:
+                    type: string
+                required: [items]
+  /ledger/events/{id}:
+    get:
+      tags: [ledger]
+      x-required-scopes: [ledger:read]
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: 事件
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LedgerEvent"
+        "404":
+          $ref: "#/components/responses/Error"
+  /ledger/events/{id}/void:
+    post:
+      tags: [ledger]
+      x-required-scopes: [ledger:write]
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+              required: [reason]
+      responses:
+        "204":
+          description: 已 void
+        "404":
+          $ref: "#/components/responses/Error"
   /portfolio:
     get:
+      tags: [ledger]
+      x-required-scopes: [ledger:read]
       responses:
         "200":
-          description: Current portfolio
+          description: 目前庫存
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Portfolio"
+  /portfolio/lots:
+    get:
+      tags: [ledger]
+      x-required-scopes: [ledger:read]
+      responses:
+        "200":
+          description: 批次明細
   /recommendations/runs:
     post:
+      tags: [recommendations]
+      x-required-scopes: [recommendations:run]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRecommendationRunRequest"
       responses:
         "201":
-          description: Run recommendations
+          description: 已產生建議
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationRun"
+        "400":
+          $ref: "#/components/responses/Error"
     get:
+      tags: [recommendations]
+      x-required-scopes: [recommendations:read]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
       responses:
         "200":
-          description: List recommendation runs
+          description: 建議 run 清單
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RecommendationRun"
+                required: [items]
+  /recommendations/runs/{id}:
+    get:
+      tags: [recommendations]
+      x-required-scopes: [recommendations:read]
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: 建議 run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationRun"
+        "404":
+          $ref: "#/components/responses/Error"
+  /recommendations/items/{id}:
+    patch:
+      tags: [recommendations]
+      x-required-scopes: [recommendations:read, recommendations:run]
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_status:
+                  type: string
+                  enum: [viewed, accepted, ignored, expired]
+              required: [user_status]
+      responses:
+        "200":
+          description: 已更新建議項目
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationItem"
+        "400":
+          $ref: "#/components/responses/Error"
+  /reconciliation/broker-snapshots:
+    post:
+      tags: [reconciliation]
+      x-required-scopes: [reconciliation:write]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "201":
+          description: 已建立券商快照
+    get:
+      tags: [reconciliation]
+      x-required-scopes: [reconciliation:read]
+      responses:
+        "200":
+          description: 券商快照清單
+  /reconciliation/runs:
+    post:
+      tags: [reconciliation]
+      x-required-scopes: [reconciliation:write]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                broker_snapshot_id:
+                  type: string
+                  format: uuid
+              required: [broker_snapshot_id]
+      responses:
+        "201":
+          description: 已建立對帳 run
+  /reconciliation/runs/{id}:
+    get:
+      tags: [reconciliation]
+      x-required-scopes: [reconciliation:read]
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: 對帳 run
+        "404":
+          $ref: "#/components/responses/Error"
+  /reconciliation/diffs/{id}/resolve:
+    post:
+      tags: [reconciliation]
+      x-required-scopes: [reconciliation:write]
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                resolution:
+                  type: string
+                  enum: [adjusted, accepted_as_is, fixed_input]
+              required: [resolution]
+      responses:
+        "200":
+          description: 已處理差異
+  /backtests/runs:
+    post:
+      tags: [backtests]
+      x-required-scopes: [backtests:run]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBacktestRunRequest"
+      responses:
+        "201":
+          description: 已建立回測
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BacktestRun"
+        "400":
+          $ref: "#/components/responses/Error"
+    get:
+      tags: [backtests]
+      x-required-scopes: [backtests:read]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: 回測清單
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/BacktestRun"
+                required: [items]
+  /backtests/runs/{id}:
+    get:
+      tags: [backtests]
+      x-required-scopes: [backtests:read]
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: 回測
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BacktestRun"
+        "404":
+          $ref: "#/components/responses/Error"
   /settings:
     get:
+      tags: [settings]
+      x-required-scopes: [settings:read]
       responses:
         "200":
-          description: Get settings
+          description: 使用者設定
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserSettings"
     put:
+      tags: [settings]
+      x-required-scopes: [settings:write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserSettingsUpdate"
       responses:
         "200":
-          description: Update settings
+          description: 已更新設定
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserSettings"
+  /strategies:
+    get:
+      tags: [settings]
+      responses:
+        "200":
+          description: 策略版本清單
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
-security:
-  - bearerAuth: []
-
+      bearerFormat: ei API key
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: ei_session
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        default: 50
+        maximum: 200
+    Cursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+  responses:
+    Error:
+      description: 錯誤信封
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    DecimalString:
+      type: string
+      pattern: ^-?[0-9]+(\.[0-9]+)?$
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              enum: [unauthorized, forbidden, not_found, validation_failed, conflict, idempotency_replay, rate_limited, internal]
+            message:
+              type: string
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                  issue:
+                    type: string
+                required: [issue]
+          required: [code, message]
+      required: [error]
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        db:
+          type: string
+        migration_version:
+          type: integer
+        migration_dirty:
+          type: boolean
+      required: [status, db, migration_version, migration_dirty]
+    RegisterRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 10
+        display_name:
+          type: string
+      required: [email, password]
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+      required: [email, password]
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        display_name:
+          type: string
+        created_at:
+          type: string
+      required: [id, email, display_name, created_at]
+    APIKey:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        key_prefix:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+        revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+      required: [id, name, description, key_prefix, scopes, created_at]
+    CreateAPIKeyRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+      required: [name, scopes]
+    Asset:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        asset_type:
+          type: string
+        symbol:
+          type: string
+        name:
+          type: string
+        market:
+          type: string
+        currency:
+          type: string
+        lot_size:
+          type: integer
+      required: [id, asset_type, symbol, name, market, currency, lot_size]
+    MarketBar:
+      type: object
+      properties:
+        symbol:
+          type: string
+        bar_date:
+          type: string
+          format: date
+        open:
+          $ref: "#/components/schemas/DecimalString"
+        high:
+          $ref: "#/components/schemas/DecimalString"
+        low:
+          $ref: "#/components/schemas/DecimalString"
+        close:
+          $ref: "#/components/schemas/DecimalString"
+        volume_shares:
+          $ref: "#/components/schemas/DecimalString"
+      required: [symbol, bar_date, close]
+    FreshnessItem:
+      type: object
+      properties:
+        dataset:
+          type: string
+        latest_data_date:
+          type: string
+          format: date
+        lag_trading_days:
+          type: integer
+        primary_source_status:
+          type: string
+          enum: [healthy, degraded, paused]
+        active_source:
+          type: string
+      required: [dataset, lag_trading_days, primary_source_status, active_source]
+    CreateLedgerEventRequest:
+      type: object
+      properties:
+        event_type:
+          type: string
+        symbol:
+          type: string
+        trade_date:
+          type: string
+          format: date
+        quantity:
+          $ref: "#/components/schemas/DecimalString"
+        unit:
+          type: string
+          enum: [share, lot]
+        price:
+          $ref: "#/components/schemas/DecimalString"
+        fee:
+          $ref: "#/components/schemas/DecimalString"
+          nullable: true
+        tax:
+          $ref: "#/components/schemas/DecimalString"
+          nullable: true
+        notes:
+          type: string
+      required: [event_type, trade_date]
+    LedgerEvent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        event_type:
+          type: string
+        trade_date:
+          type: string
+          format: date
+        quantity_shares:
+          $ref: "#/components/schemas/DecimalString"
+        quantity_lots:
+          $ref: "#/components/schemas/DecimalString"
+        fee_source:
+          type: string
+        cash_delta:
+          $ref: "#/components/schemas/DecimalString"
+      required: [id, event_type, trade_date, cash_delta]
+    Portfolio:
+      type: object
+      properties:
+        as_of:
+          type: string
+        market_data_as_of:
+          type: string
+          format: date
+        cash:
+          $ref: "#/components/schemas/DecimalString"
+        positions:
+          type: array
+          items:
+            type: object
+      required: [as_of, cash, positions]
+    CreateRecommendationRunRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        target_weights:
+          type: object
+          additionalProperties:
+            oneOf:
+              - $ref: "#/components/schemas/DecimalString"
+              - type: number
+                minimum: 0
+                maximum: 1
+    RecommendationRun:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        strategy:
+          type: object
+          additionalProperties:
+            type: string
+        market_data_as_of:
+          type: string
+          format: date
+        portfolio_as_of:
+          type: string
+        disclaimer:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecommendationItem"
+      required: [id, strategy, market_data_as_of, portfolio_as_of, disclaimer, status, created_at]
+    RecommendationItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        action:
+          type: string
+          enum: [buy, sell, hold, no_action]
+        symbol:
+          type: string
+        quantity_shares:
+          $ref: "#/components/schemas/DecimalString"
+        est_price:
+          $ref: "#/components/schemas/DecimalString"
+        est_amount:
+          $ref: "#/components/schemas/DecimalString"
+        est_fee_tax:
+          $ref: "#/components/schemas/DecimalString"
+        current_weight:
+          $ref: "#/components/schemas/DecimalString"
+        target_weight:
+          $ref: "#/components/schemas/DecimalString"
+        reason:
+          type: string
+        risks:
+          type: string
+        confidence:
+          $ref: "#/components/schemas/DecimalString"
+        user_status:
+          type: string
+      required: [id, action, reason, risks, user_status]
+    CreateBacktestRunRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        symbols:
+          type: array
+          items:
+            type: string
+        from:
+          type: string
+          format: date
+        to:
+          type: string
+          format: date
+        initial_cash:
+          $ref: "#/components/schemas/DecimalString"
+        target_weights:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/DecimalString"
+        benchmark_symbol:
+          type: string
+        monthly_amount:
+          $ref: "#/components/schemas/DecimalString"
+      required: [initial_cash]
+    BacktestRun:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        status:
+          type: string
+          enum: [pending, completed, failed]
+        params:
+          type: object
+        result:
+          type: object
+          nullable: true
+        error_message:
+          type: string
+        created_at:
+          type: string
+      required: [id, name, status, params, created_at]
+    UserSettings:
+      type: object
+      additionalProperties: true
+    UserSettingsUpdate:
+      type: object
+      additionalProperties: true

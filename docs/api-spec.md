@@ -26,7 +26,10 @@ API key scopes：
 | `market:read` | 行情、公司行動、日曆 |
 | `recommendations:read` | 查詢建議 |
 | `recommendations:run` | 觸發建議計算 |
-| `reconciliation:write` | 匯入券商快照、處理差異 |
+| `reconciliation:read` | 查詢券商快照與對帳結果 |
+| `reconciliation:write` | 匯入券商快照、建立對帳 run、處理差異 |
+| `backtests:read` | 查詢回測紀錄 |
+| `backtests:run` | 建立回測 run |
 | `settings:read` / `settings:write` | 設定 |
 
 API key 管理端點本身只接受 session 認證（避免用 key 自我擴權）。
@@ -141,6 +144,8 @@ GET  /recommendations/runs/{id}   # 含 items、inputs 摘要、資料時間
 PATCH /recommendations/items/{id} # {"user_status": "accepted" | "ignored"}
 ```
 
+`PATCH /recommendations/items/{id}` 會改變使用者對建議項目的狀態，API key 必須同時具備 `recommendations:read` 與 `recommendations:run`，只讀 key 不可採納或忽略建議。
+
 run 回應範例（節錄）：
 
 ```json
@@ -178,6 +183,33 @@ POST /reconciliation/diffs/{id}/resolve
      # body: {"resolution": "adjusted", "adjustment": {…ledger event 欄位…}}
      # resolution = adjusted 時，伺服器在同交易內建立 adjustment 事件並回填關聯
 ```
+
+查詢券商快照與對帳 run 使用 `reconciliation:read`；建立快照、建立 run 與 resolve 差異使用 `reconciliation:write`。
+
+### 回測
+
+```
+POST /backtests/runs
+GET  /backtests/runs?limit=20
+GET  /backtests/runs/{id}
+```
+
+建立回測 body 範例：
+
+```json
+{
+  "name": "目標權重 2026H1",
+  "symbols": ["0050", "2330"],
+  "from": "2026-01-01",
+  "to": "2026-06-12",
+  "initial_cash": "1000000",
+  "target_weights": {"0050": "0.4", "2330": "0.55", "cash": "0.05"},
+  "benchmark_symbol": "0050",
+  "monthly_amount": "50000"
+}
+```
+
+回測使用已入庫日終資料，以收盤價成交，結果包含策略、買進持有與定期定額基準。金額與數量維持字串傳輸。
 
 ### 設定與系統
 

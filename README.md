@@ -23,6 +23,13 @@ docker compose up -d
 curl http://localhost:8080/healthz
 ```
 
+Compose 會啟動：
+
+- `api`：Go API server，對外 `http://localhost:8080`。
+- `worker`：市場資料匯入與排程。
+- `postgres`：PostgreSQL 16。
+- `ui`：SvelteKit 靜態前端，對外 `http://localhost:3000`，並由 nginx 把 `/api` 反代到後端。
+
 API base path 是 `/api/v1`。第一次使用可先註冊、登入，再建立 API key：
 
 ```bash
@@ -38,12 +45,24 @@ curl -X POST http://localhost:8080/api/v1/auth/register \
 - `GET /portfolio` 庫存查詢與 portfolio snapshot。
 - 目標權重再平衡建議引擎，保存 recommendation run/items 並附資料時間與免責聲明。
 - 券商快照匯入與基本股數差異對帳。
+- 回測 run 建立與查詢，重用策略核心並輸出策略、定期定額與買進持有基準。
 - worker 會定期嘗試匯入 TWSE OpenAPI 當日全市場日終行情，成功或失敗都會留下 `ingestion_runs` 紀錄。
+
+## 前端
+
+前端位於 `web/`，使用 Svelte 5、SvelteKit 2、Vite 8 與 Tailwind v4。它是 API 儀表板客戶端，包含登入、庫存、批次、事件、建議、對帳、回測、設定、API key 與市場資料頁面。
+
+```bash
+cd web
+npm.cmd run check
+npm.cmd run build
+```
 
 本機驗證：
 
 ```bash
 go test ./...
 go vet ./...
+cd web && npm.cmd run check && npm.cmd run build
 docker compose config
 ```

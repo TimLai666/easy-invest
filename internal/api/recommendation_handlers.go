@@ -9,25 +9,24 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/tingz/easy-invest/internal/auth"
-	"github.com/tingz/easy-invest/internal/num"
 	"github.com/tingz/easy-invest/internal/recommend"
 )
 
+type createRecommendationRunRequest struct {
+	TargetWeights map[string]json.RawMessage `json:"target_weights,omitempty"`
+}
+
 func (s *Server) handleCreateRecommendationRun(w http.ResponseWriter, r *http.Request) {
 	principal, _ := auth.PrincipalFromContext(r.Context())
-	var raw map[string]any
-	if r.Body != http.NoBody {
-		_ = json.NewDecoder(r.Body).Decode(&raw)
+	var req createRecommendationRunRequest
+	if err := decodeOptionalJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "validation_failed", "JSON 格式錯誤")
+		return
 	}
-	override := recommend.Override{}
-	if v, ok := raw["target_weights"]; ok {
-		b, _ := json.Marshal(v)
-		var weights map[string]any
-		_ = json.Unmarshal(b, &weights)
-		override.TargetWeights = map[string]decimal.Decimal{}
-		for symbol, value := range weights {
-			override.TargetWeights[symbol] = num.Parse(str(value))
-		}
+	override, detail, err := req.override()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "validation_failed", err.Error(), detail)
+		return
 	}
 	run, err := s.recommend.CreateRun(r.Context(), principal.UserID, override)
 	if err != nil {
@@ -37,6 +36,54 @@ func (s *Server) handleCreateRecommendationRun(w http.ResponseWriter, r *http.Re
 	_ = s.auth.Audit(r.Context(), principal, "recommendation.run", "recommendation_runs", run.ID, nil)
 	writeJSON(w, http.StatusCreated, run)
 }
+
+func (req createRecommendationRunRequest) override() (recommend.Override, ErrorDetail, error) {
+	override := recommend.Override{}
+	if len(req.TargetWeights) == 0 {
+		return override, ErrorDetail{}, nil
+	}
+	override.TargetWeights = make(map[string]decimal.Decimal, len(req.TargetWeights))
+	for symbol, raw := range req.TargetWeights {
+		if symbol == "" {
+			return recommend.Override{}, ErrorDetail{Field: "target_weights", Issue: "symbol_required"}, errValidation("target_weights 的標的代碼不可為空")
+		}
+		weight, err := parseWeight(raw)
+		if err != nil {
+			return recommend.Override{}, ErrorDetail{Field: "target_weights." + symbol, Issue: "must_be_decimal_string_or_number"}, err
+		}
+		if weight.IsNegative() || weight.GreaterThan(decimal.NewFromInt(1)) {
+			return recommend.Override{}, ErrorDetail{Field: "target_weights." + symbol, Issue: "must_be_between_0_and_1"}, errValidation("target_weights 必須介於 0 到 1")
+		}
+		override.TargetWeights[symbol] = weight
+	}
+	return override, ErrorDetail{}, nil
+}
+
+func parseWeight(raw json.RawMessage) (decimal.Decimal, error) {
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		weight, err := decimal.NewFromString(text)
+		if err != nil {
+			return decimal.Decimal{}, errValidation("target_weights 必須是 decimal 字串或數字")
+		}
+		return weight, nil
+	}
+	var number json.Number
+	if err := json.Unmarshal(raw, &number); err == nil {
+		weight, err := decimal.NewFromString(number.String())
+		if err != nil {
+			return decimal.Decimal{}, errValidation("target_weights 必須是 decimal 字串或數字")
+		}
+		return weight, nil
+	}
+	return decimal.Decimal{}, errValidation("target_weights 必須是 decimal 字串或數字")
+}
+
+type validationError string
+
+func (e validationError) Error() string { return string(e) }
+
+func errValidation(message string) error { return validationError(message) }
 
 func (s *Server) handleListRecommendationRuns(w http.ResponseWriter, r *http.Request) {
 	principal, _ := auth.PrincipalFromContext(r.Context())

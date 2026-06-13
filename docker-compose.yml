@@ -49,5 +49,14 @@ services:
       postgres:
         condition: service_healthy
 
+  ui:
+    build:
+      context: ./web
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_started
+
 volumes:
   postgres-data:
