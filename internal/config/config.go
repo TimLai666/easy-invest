@@ -19,6 +19,7 @@ type Config struct {
 	TWSECorpActionsURL  string
 	TWSEHolidayQueryURL string
 	TPExDailyAllURL     string
+	TPExStockDayURL     string
 	// MarketImportOnStart 為 true 時，worker 啟動先跑一次 catch-up（把缺口補齊到最新）。
 	MarketImportOnStart bool
 	// MarketBackfillMonths 是歷史回補窗口（月），詳見 marketdata.PipelineConfig。
@@ -39,6 +40,7 @@ func Load() Config {
 		TWSECorpActionsURL:   env("TWSE_CORP_ACTIONS_URL", "https://openapi.twse.com.tw/v1/exchangeReport/TWT48U_ALL"),
 		TWSEHolidayQueryURL:  env("TWSE_HOLIDAY_QUERY_URL", "https://www.twse.com.tw/rwd/zh/holidaySchedule/holidaySchedule"),
 		TPExDailyAllURL:      env("TPEX_DAILY_ALL_URL", "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"),
+		TPExStockDayURL:      env("TPEX_STOCK_DAY_URL", "https://www.tpex.org.tw/www/zh-tw/afterTrading/tradingStock"),
 		MarketImportOnStart:  envBool("MARKET_IMPORT_ON_START", true),
 		MarketBackfillMonths: envInt("MARKET_BACKFILL_MONTHS", 24),
 	}

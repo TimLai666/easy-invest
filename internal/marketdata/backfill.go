@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/shopspring/decimal"
 )
 
 // stockDayMinDate 是 TWSE 個股日成交資訊（STOCK_DAY）可查詢的最早日期。
@@ -37,6 +38,23 @@ type stockDayResponse struct {
 	Title  string     `json:"title"`
 	Fields []string   `json:"fields"`
 	Data   [][]string `json:"data"`
+}
+
+// tpexStockDayResponse 是 TPEx 個股日成交資訊（tradingStock）的回應格式。
+// 實測：stat="ok" 時 tables[0].data 列為 9 欄
+// [日期(民國年斜線), 成交仟股, 成交仟元, 開盤, 最高, 最低, 收盤, 漲跌, 筆數]。
+type tpexStockDayResponse struct {
+	Stat   string              `json:"stat"`
+	Tables []tpexStockDayTable `json:"tables"`
+}
+
+type tpexStockDayTable struct {
+	Title      string     `json:"title"`
+	Subtitle   string     `json:"subtitle"`
+	Date       string     `json:"date"`
+	Fields     []string   `json:"fields"`
+	Data       [][]string `json:"data"`
+	TotalCount int        `json:"totalCount"`
 }
 
 // TrackedSymbols 回傳行情追蹤範圍：出現在交易流水的標的 ∪ 所有使用者的關注清單 ∪ 基準標的（0050）。
@@ -170,11 +188,22 @@ func (p *Pipeline) markCheckpoint(ctx context.Context, dataset, symbol string, m
 	return err
 }
 
-// BackfillSymbolMonth 用 TWSE 個股日成交資訊（STOCK_DAY，按月）回補一個標的×月份。
+// BackfillSymbolMonth 依市場用官方個股日成交資訊按月回補一個標的×月份。
 // 回傳入庫列數；來源確定無資料時回傳 errUnrecoverable 包裝的錯誤。
 var errUnrecoverable = errors.New("來源無此區間資料，缺口標記為 unrecoverable")
 
 func (p *Pipeline) BackfillSymbolMonth(ctx context.Context, sym TrackedSymbol, month time.Time) (int, error) {
+	switch sym.Market {
+	case "TWSE":
+		return p.backfillTWSESymbolMonth(ctx, sym, month)
+	case "TPEX":
+		return p.backfillTPExSymbolMonth(ctx, sym, month)
+	default:
+		return 0, fmt.Errorf("不支援市場 %s 的歷史回補", sym.Market)
+	}
+}
+
+func (p *Pipeline) backfillTWSESymbolMonth(ctx context.Context, sym TrackedSymbol, month time.Time) (int, error) {
 	url := fmt.Sprintf("%s?response=json&date=%s01&stockNo=%s", p.cfg.TWSEStockDayURL, month.Format("200601"), sym.Symbol)
 	dataTime := month
 	runID, err := p.beginIngestionRun(ctx, "twse", url, "TWSE 公開資料", datasetDailyBarsBackfill, &dataTime)
@@ -223,6 +252,58 @@ func (p *Pipeline) BackfillSymbolMonth(ctx context.Context, sym TrackedSymbol, m
 	return imported, nil
 }
 
+func (p *Pipeline) backfillTPExSymbolMonth(ctx context.Context, sym TrackedSymbol, month time.Time) (int, error) {
+	url := fmt.Sprintf("%s?date=%s&code=%s&response=json", p.cfg.TPExStockDayURL, month.Format("2006/01/02"), sym.Symbol)
+	dataTime := month
+	runID, err := p.beginIngestionRun(ctx, "tpex", url, "TPEx 公開資料", datasetDailyBarsBackfill, &dataTime)
+	if err != nil {
+		return 0, err
+	}
+
+	var payload tpexStockDayResponse
+	checksum, err := p.fetchJSON(ctx, p.tpexLimiter, url, &payload)
+	if err != nil {
+		_ = p.finishIngestionRun(ctx, runID, "failed", 0, "", err.Error(), nil)
+		return 0, err
+	}
+	if !strings.EqualFold(payload.Stat, "ok") {
+		msg := fmt.Sprintf("TPEx tradingStock 回應狀態異常: %s", payload.Stat)
+		_ = p.finishIngestionRun(ctx, runID, "failed", 0, checksum, msg, nil)
+		return 0, errors.New(msg)
+	}
+	data := firstTPExStockDayRows(payload.Tables)
+	if len(data) == 0 {
+		msg := "TPEx tradingStock 該月份無任何資料"
+		_ = p.finishIngestionRun(ctx, runID, "succeeded", 0, checksum, "", &dataTime)
+		if month.Before(time.Date(p.now().Year(), p.now().Month(), 1, 0, 0, 0, 0, time.UTC)) {
+			return 0, fmt.Errorf("%w: %s", errUnrecoverable, msg)
+		}
+		return 0, nil
+	}
+
+	bars := parseTPExStockDayRows(data, sym.Symbol, sym.Market)
+	imported, skipped, err := p.saveDailyBars(ctx, runID, bars)
+	if err != nil {
+		_ = p.finishIngestionRun(ctx, runID, "failed", imported, checksum, err.Error(), nil)
+		return imported, err
+	}
+	latest := latestBarDate(bars)
+	if err := p.finishIngestionRun(ctx, runID, "succeeded", imported, checksum, "", latest); err != nil {
+		return imported, err
+	}
+	p.log.Info("回補完成", "symbol", sym.Symbol, "market", sym.Market, "month", month.Format("2006-01"), "rows", imported, "skipped", skipped)
+	return imported, nil
+}
+
+func firstTPExStockDayRows(tables []tpexStockDayTable) [][]string {
+	for _, table := range tables {
+		if len(table.Data) > 0 {
+			return table.Data
+		}
+	}
+	return nil
+}
+
 // parseStockDayRows 把 STOCK_DAY 的 data 列標準化（純函式，可單元測試）。
 // 欄位順序: [日期, 成交股數, 成交金額, 開盤價, 最高價, 最低價, 收盤價, 漲跌價差, 成交筆數, 註記]。
 func parseStockDayRows(data [][]string, symbol, market string) []dailyBarRow {
@@ -248,6 +329,37 @@ func parseStockDayRows(data [][]string, symbol, market string) []dailyBarRow {
 		bars = append(bars, dailyBarRow{
 			Symbol: symbol, Market: market, Date: barDate,
 			Open: open, High: high, Low: low, Close: closePrice, Volume: volume, Turnover: turnover,
+		})
+	}
+	return bars
+}
+
+// parseTPExStockDayRows 把 TPEx tradingStock 的 data 列標準化。
+// 欄位順序: [日期, 成交仟股, 成交仟元, 開盤, 最高, 最低, 收盤, 漲跌, 筆數]。
+func parseTPExStockDayRows(data [][]string, symbol, market string) []dailyBarRow {
+	bars := make([]dailyBarRow, 0, len(data))
+	thousand := decimal.NewFromInt(1000)
+	for _, row := range data {
+		if len(row) < 7 {
+			continue
+		}
+		barDate, err := ParseROCSlashDate(row[0])
+		if err != nil {
+			continue
+		}
+		closePrice, ok := parseTWNumber(row[6])
+		if !ok || closePrice.IsZero() {
+			continue
+		}
+		volume, _ := parseTWNumber(row[1])
+		turnover, _ := parseTWNumber(row[2])
+		open, _ := parseTWNumber(row[3])
+		high, _ := parseTWNumber(row[4])
+		low, _ := parseTWNumber(row[5])
+		bars = append(bars, dailyBarRow{
+			Symbol: symbol, Market: market, Date: barDate,
+			Open: open, High: high, Low: low, Close: closePrice,
+			Volume: volume.Mul(thousand), Turnover: turnover.Mul(thousand),
 		})
 	}
 	return bars
@@ -313,16 +425,16 @@ func (p *Pipeline) RunCatchUp(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if p.twseLimiter.Paused() {
-			p.log.Warn("TWSE 連續失敗達上限，本輪回補提前結束，等下個排程週期再試")
+		if p.sourcePaused(sym.Market) {
+			p.log.Warn("來源連續失敗達上限，本輪回補提前結束，等下個排程週期再試", "market", sym.Market)
 			return nil
 		}
-		if sym.Market != "TWSE" {
-			// TODO: TPEx 個股歷史回補端點尚未實測（見 docs/data-sources.md），上櫃標的暫時只有當日快照。
+		if sym.Market != "TWSE" && sym.Market != "TPEX" {
 			continue
 		}
+		calendarMarket := "TWSE"
 		start := backfillStartDate(sym, today, p.cfg.BackfillMonths)
-		required, err := p.svc.TradingDaysBetween(ctx, "TWSE", start, lastOpen)
+		required, err := p.svc.TradingDaysBetween(ctx, calendarMarket, start, lastOpen)
 		if err != nil {
 			return err
 		}
@@ -334,8 +446,8 @@ func (p *Pipeline) RunCatchUp(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if p.twseLimiter.Paused() {
-				p.log.Warn("TWSE 連續失敗達上限，本輪回補提前結束，等下個排程週期再試")
+			if p.sourcePaused(sym.Market) {
+				p.log.Warn("來源連續失敗達上限，本輪回補提前結束，等下個排程週期再試", "market", sym.Market)
 				return nil
 			}
 			status, err := p.checkpointStatus(ctx, datasetDailyBarsBackfill, sym.Symbol, month)
@@ -364,4 +476,15 @@ func (p *Pipeline) RunCatchUp(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (p *Pipeline) sourcePaused(market string) bool {
+	switch market {
+	case "TWSE":
+		return p.twseLimiter.Paused()
+	case "TPEX":
+		return p.tpexLimiter.Paused()
+	default:
+		return false
+	}
 }

@@ -88,6 +88,9 @@ npm.cmd run build
 ```bash
 go test ./...
 go vet ./...
+go run ./cmd/verify-marketdata
 cd web && npm.cmd run check && npm.cmd run build
 docker compose config
 ```
+
+`verify-marketdata` 會直接連官方 TWSE/TPEx API，預設每次請求間隔 4 秒，避免驗證時對來源造成壓力。

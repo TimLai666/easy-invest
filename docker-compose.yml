@@ -25,6 +25,11 @@ services:
       HTTP_ADDR: :8080
       ENABLE_REGISTRATION: ${ENABLE_REGISTRATION:-true}
       TWSE_DAILY_ALL_URL: ${TWSE_DAILY_ALL_URL:-https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL}
+      TWSE_STOCK_DAY_URL: ${TWSE_STOCK_DAY_URL:-https://www.twse.com.tw/exchangeReport/STOCK_DAY}
+      TWSE_CORP_ACTIONS_URL: ${TWSE_CORP_ACTIONS_URL:-https://openapi.twse.com.tw/v1/exchangeReport/TWT48U_ALL}
+      TWSE_HOLIDAY_QUERY_URL: ${TWSE_HOLIDAY_QUERY_URL:-https://www.twse.com.tw/rwd/zh/holidaySchedule/holidaySchedule}
+      TPEX_DAILY_ALL_URL: ${TPEX_DAILY_ALL_URL:-https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes}
+      TPEX_STOCK_DAY_URL: ${TPEX_STOCK_DAY_URL:-https://www.tpex.org.tw/www/zh-tw/afterTrading/tradingStock}
       MARKET_IMPORT_ON_START: "false"
       DATABASE_URL: postgres://easy_invest:easy_invest@postgres:5432/easy_invest?sslmode=disable
     ports:
@@ -43,6 +48,11 @@ services:
       APP_SECRET: ${APP_SECRET:-change-me-at-least-32-bytes}
       ENABLE_REGISTRATION: ${ENABLE_REGISTRATION:-true}
       TWSE_DAILY_ALL_URL: ${TWSE_DAILY_ALL_URL:-https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL}
+      TWSE_STOCK_DAY_URL: ${TWSE_STOCK_DAY_URL:-https://www.twse.com.tw/exchangeReport/STOCK_DAY}
+      TWSE_CORP_ACTIONS_URL: ${TWSE_CORP_ACTIONS_URL:-https://openapi.twse.com.tw/v1/exchangeReport/TWT48U_ALL}
+      TWSE_HOLIDAY_QUERY_URL: ${TWSE_HOLIDAY_QUERY_URL:-https://www.twse.com.tw/rwd/zh/holidaySchedule/holidaySchedule}
+      TPEX_DAILY_ALL_URL: ${TPEX_DAILY_ALL_URL:-https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes}
+      TPEX_STOCK_DAY_URL: ${TPEX_STOCK_DAY_URL:-https://www.tpex.org.tw/www/zh-tw/afterTrading/tradingStock}
       MARKET_IMPORT_ON_START: ${MARKET_IMPORT_ON_START:-true}
       DATABASE_URL: postgres://easy_invest:easy_invest@postgres:5432/easy_invest?sslmode=disable
     depends_on:

@@ -39,6 +39,7 @@ func main() {
 	pipelineCfg.TWSECorpActionsURL = cfg.TWSECorpActionsURL
 	pipelineCfg.TWSEHolidayQueryURL = cfg.TWSEHolidayQueryURL
 	pipelineCfg.TPExDailyAllURL = cfg.TPExDailyAllURL
+	pipelineCfg.TPExStockDayURL = cfg.TPExStockDayURL
 	pipelineCfg.BackfillMonths = cfg.MarketBackfillMonths
 	pipeline := marketdata.NewPipeline(db, pipelineCfg, log)
 	svc := pipeline.Service()

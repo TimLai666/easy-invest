@@ -28,6 +28,7 @@ type PipelineConfig struct {
 	TWSECorpActionsURL  string // 上市除權除息預告表（OpenAPI TWT48U_ALL）
 	TWSEHolidayQueryURL string // 市場開休市日期查詢（rwd 版，可指定年度）
 	TPExDailyAllURL     string // 上櫃當日收盤行情（TPEx OpenAPI）
+	TPExStockDayURL     string // 上櫃個股月度歷史（TPEx tradingStock，按月回補用）
 
 	// BackfillMonths 是沒有交易紀錄可參考時（關注清單、基準標的）的歷史回補窗口；
 	// 持有過的標的會從最早交易日再往前推這個窗口開始補。
@@ -46,6 +47,7 @@ func DefaultPipelineConfig() PipelineConfig {
 		TWSECorpActionsURL:  "https://openapi.twse.com.tw/v1/exchangeReport/TWT48U_ALL",
 		TWSEHolidayQueryURL: "https://www.twse.com.tw/rwd/zh/holidaySchedule/holidaySchedule",
 		TPExDailyAllURL:     "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes",
+		TPExStockDayURL:     "https://www.tpex.org.tw/www/zh-tw/afterTrading/tradingStock",
 		BackfillMonths:      24,
 		RequestInterval:     4 * time.Second,
 		RequestJitter:       1 * time.Second,
