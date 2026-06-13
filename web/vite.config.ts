@@ -1,20 +1,17 @@
 import tailwindcss from '@tailwindcss/vite';
-import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-	plugins: [
-		tailwindcss(),
-		sveltekit({
-			compilerOptions: {
-				// Force runes mode for the project, except for libraries. Can be removed in svelte 6.
-				runes: ({ filename }) =>
-					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
-			},
-			adapter: adapter({
-				fallback: 'index.html'
-			})
-		})
-	]
+	plugins: [tailwindcss(), sveltekit()],
+	server: {
+		proxy: {
+			// 開發時把 /api/ 代理到本機後端。
+			// 注意要用 '/api/'（含斜線），否則會誤攔前端路由 /api-keys。
+			'/api/': {
+				target: 'http://localhost:8080',
+				changeOrigin: true
+			}
+		}
+	}
 });
