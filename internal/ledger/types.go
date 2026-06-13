@@ -142,6 +142,17 @@ type Portfolio struct {
 	MarketDataAsOf *string    `json:"market_data_as_of,omitempty"`
 }
 
+type PortfolioHistoryPoint struct {
+	Date                string   `json:"date"`
+	Cash                string   `json:"cash"`
+	MarketValue         string   `json:"market_value"`
+	TotalValue          string   `json:"total_value"`
+	MarketDataAsOf      *string  `json:"market_data_as_of,omitempty"`
+	MissingPriceSymbols []string `json:"missing_price_symbols,omitempty"`
+	StalePriceSymbols   []string `json:"stale_price_symbols,omitempty"`
+	IsComplete          bool     `json:"is_complete"`
+}
+
 type settingsRow struct {
 	FeeRate             decimal.Decimal
 	FeeDiscount         decimal.Decimal

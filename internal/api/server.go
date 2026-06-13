@@ -91,6 +91,7 @@ func (s *Server) Routes() http.Handler {
 			r.Get("/ledger/events/{id}", s.requireScopes("ledger:read")(s.handleGetLedgerEvent))
 			r.Post("/ledger/events/{id}/void", s.requireScopes("ledger:write")(s.handleVoidLedgerEvent))
 			r.Get("/portfolio", s.requireScopes("ledger:read")(s.handlePortfolio))
+			r.Get("/portfolio/history", s.requireScopes("ledger:read")(s.handlePortfolioHistory))
 			r.Get("/portfolio/lots", s.requireScopes("ledger:read")(s.handleLots))
 
 			r.Post("/recommendations/runs", s.requireScopes("recommendations:run")(s.handleCreateRecommendationRun))

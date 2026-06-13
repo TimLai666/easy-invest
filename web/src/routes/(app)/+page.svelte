@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { portfolio as portfolioApi, ApiError } from '$lib/api';
-	import type { Portfolio } from '$lib/api';
+	import type { Portfolio, PortfolioHistoryPoint } from '$lib/api';
 	import { toDecimal, formatMoney } from '$lib/format';
 	import { chartPalette } from '$lib/nav';
 	import Decimal from 'decimal.js';
@@ -12,6 +12,7 @@
 	import Pnl from '$lib/components/app/pnl.svelte';
 	import Quantity from '$lib/components/app/quantity.svelte';
 	import DonutChart, { type DonutSlice } from '$lib/components/app/donut-chart.svelte';
+	import LineChart, { type Series } from '$lib/components/app/line-chart.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Table from '$lib/components/ui/table';
 	import { Button } from '$lib/components/ui/button';
@@ -22,9 +23,11 @@
 	import TrendingUpIcon from '@lucide/svelte/icons/trending-up';
 	import PiggyBankIcon from '@lucide/svelte/icons/piggy-bank';
 	import PlusIcon from '@lucide/svelte/icons/plus';
+	import ChartLineIcon from '@lucide/svelte/icons/chart-line';
 	import { assetTypeLabels } from '$lib/labels';
 
 	let data = $state<Portfolio | null>(null);
+	let history = $state<PortfolioHistoryPoint[]>([]);
 	let loading = $state(true);
 	let error = $state<unknown>(null);
 
@@ -32,7 +35,7 @@
 		loading = true;
 		error = null;
 		try {
-			data = await portfolioApi.get();
+			[data, history] = await Promise.all([portfolioApi.get(), portfolioApi.history({ limit: 120 })]);
 		} catch (e) {
 			error = e;
 		} finally {
@@ -58,6 +61,16 @@
 	const cash = $derived(toDecimal(data?.cash) ?? new Decimal(0));
 	const totalAssets = $derived(totalMarketValue.plus(cash));
 	const pnlPct = $derived(totalCost.isZero() ? null : totalPnl.div(totalCost).toString());
+	const latestHistory = $derived(history.at(-1));
+	const incompleteHistoryDays = $derived(history.filter((p) => !p.is_complete).length);
+	const historySeries = $derived.by<Series[]>(() => {
+		const points = history
+			.map((p) => ({ x: p.date, y: Number(toDecimal(p.total_value)?.toString() ?? 0) }))
+			.filter((p) => Number.isFinite(p.y));
+		return points.length
+			? [{ label: '總資產', color: 'var(--primary)', points }]
+			: [];
+	});
 
 	const slices = $derived.by<DonutSlice[]>(() => {
 		const arr: DonutSlice[] = positions
@@ -113,6 +126,36 @@
 				{#snippet footer()}TWD{/snippet}
 			</StatCard>
 		</div>
+
+		<Card.Root>
+			<Card.Header class="flex flex-row items-center justify-between">
+				<div>
+					<Card.Title>每日淨值</Card.Title>
+					<Card.Description>
+						{#if latestHistory}
+							截至 {latestHistory.date}，總資產 {formatMoney(latestHistory.total_value)}
+						{:else}
+							尚無可估值交易日
+						{/if}
+					</Card.Description>
+				</div>
+				{#if incompleteHistoryDays > 0}
+					<Badge variant="secondary">{incompleteHistoryDays} 天缺行情</Badge>
+				{:else if latestHistory}
+					<Badge variant="secondary">行情完整</Badge>
+				{/if}
+			</Card.Header>
+			<Card.Content>
+				{#if historySeries.length}
+					<LineChart series={historySeries} yPrefix="NT$" />
+				{:else}
+					<div class="text-muted-foreground flex h-56 items-center justify-center gap-2 text-sm">
+						<ChartLineIcon class="size-5" />
+						<span>新增交易並匯入日終行情後會顯示淨值走勢</span>
+					</div>
+				{/if}
+			</Card.Content>
+		</Card.Root>
 
 		<div class="grid gap-6 lg:grid-cols-3">
 			<!-- 配置圓環 -->

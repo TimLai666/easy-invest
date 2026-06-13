@@ -110,6 +110,17 @@ func (s *Server) handlePortfolio(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, portfolio)
 }
 
+func (s *Server) handlePortfolioHistory(w http.ResponseWriter, r *http.Request) {
+	principal, _ := auth.PrincipalFromContext(r.Context())
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	items, err := s.ledger.PortfolioHistory(r.Context(), principal.UserID, r.URL.Query().Get("from"), r.URL.Query().Get("to"), limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", "庫存歷史讀取失敗")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 func (s *Server) handleLots(w http.ResponseWriter, r *http.Request) {
 	principal, _ := auth.PrincipalFromContext(r.Context())
 	lots, err := s.ledger.Lots(r.Context(), principal.UserID, r.URL.Query().Get("symbol"))

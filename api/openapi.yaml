@@ -396,6 +396,35 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Portfolio"
+  /portfolio/history:
+    get:
+      tags: [ledger]
+      x-required-scopes: [ledger:read]
+      parameters:
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: 每日淨值序列
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PortfolioHistoryPoint"
+                required: [items]
   /portfolio/lots:
     get:
       tags: [ledger]
@@ -916,6 +945,33 @@ components:
           items:
             type: object
       required: [as_of, cash, positions]
+    PortfolioHistoryPoint:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        cash:
+          $ref: "#/components/schemas/DecimalString"
+        market_value:
+          $ref: "#/components/schemas/DecimalString"
+        total_value:
+          $ref: "#/components/schemas/DecimalString"
+        market_data_as_of:
+          type: string
+          format: date
+          nullable: true
+        missing_price_symbols:
+          type: array
+          items:
+            type: string
+        stale_price_symbols:
+          type: array
+          items:
+            type: string
+        is_complete:
+          type: boolean
+      required: [date, cash, market_value, total_value, is_complete]
     CreateRecommendationRunRequest:
       type: object
       additionalProperties: false

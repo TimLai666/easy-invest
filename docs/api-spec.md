@@ -129,11 +129,13 @@ POST /api/v1/ledger/events
 ```
 GET /portfolio                    # 目前持股、平均成本、市值、未實現損益、現金
 GET /portfolio/lots?symbol=2330   # 批次明細（原始成本與調整後成本兩種視角）
-GET /portfolio/history?from=&to=  # 每日市值序列（M3 之後）
+GET /portfolio/history?from=&to=  # 每日淨值序列；以交易流水累計現金與持股，再用已入庫日 K 估值
 GET /portfolio/performance?period=ytd   # 已實現/未實現、TWR 或 XIRR（M3+）
 ```
 
 `GET /portfolio` 回應必附 `market_data_as_of`，標示市值用的是哪一天收盤價。
+
+`GET /portfolio/history` 只使用資料庫裡已匯入的真實日終行情。若某交易日某檔持股缺價格，該日回應會把代號列在 `missing_price_symbols`，`is_complete=false`；若沿用該日前最近一筆收盤價估值，會列在 `stale_price_symbols` 並保留 `market_data_as_of`。
 
 ### 建議
 

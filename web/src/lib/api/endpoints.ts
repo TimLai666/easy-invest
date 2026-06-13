@@ -14,6 +14,7 @@ import type {
 	LedgerEvent,
 	MeResponse,
 	Portfolio,
+	PortfolioHistoryPoint,
 	Lot,
 	RecommendationItem,
 	RecommendationItemStatus,
@@ -77,6 +78,8 @@ export const ledger = {
 
 export const portfolio = {
 	get: () => api.get<Portfolio>('/portfolio'),
+	history: (query?: { from?: string; to?: string; limit?: number }) =>
+		api.get<Items<PortfolioHistoryPoint>>('/portfolio/history', { query }).then((r) => r.items ?? []),
 	lots: (symbol?: string) =>
 		api.get<Items<Lot>>('/portfolio/lots', { query: { symbol } }).then((r) => r.items ?? [])
 };

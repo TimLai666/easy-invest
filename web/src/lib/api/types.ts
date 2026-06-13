@@ -117,6 +117,17 @@ export interface Portfolio {
 	positions: Position[];
 }
 
+export interface PortfolioHistoryPoint {
+	date: string;
+	cash: string;
+	market_value: string;
+	total_value: string;
+	market_data_as_of?: string;
+	missing_price_symbols?: string[];
+	stale_price_symbols?: string[];
+	is_complete: boolean;
+}
+
 export interface Lot {
 	id: string;
 	asset_id: string;
