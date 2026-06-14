@@ -1,8 +1,8 @@
 package backtest
 
-// TODO(insyra#pending): walk-forward 切片與樣本外彙總、（年化）夏普與最大回撤
-// 等投組績效指標，Insyra 目前未提供，故自寫於本套件。待 Insyra 上游補上後改用。
-// 決策與 upstream issue 草稿見 docs/insyra-upstream-todo.md。
+// TODO(insyra#178): walk-forward 切片與樣本外彙總，Insyra 未提供，自寫於本套件。
+// TODO(insyra#175): （年化）夏普與最大回撤等投組績效指標，Insyra 未提供，自寫。
+// 待上游補上後改用。決策見 docs/insyra-upstream-todo.md。
 
 import (
 	"errors"
