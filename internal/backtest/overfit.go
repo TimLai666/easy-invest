@@ -12,6 +12,12 @@ import (
 //     夏普比率顯著大於 0 的機率（DSR）。
 // 參考：Bailey & López de Prado, "The Probability of Backtest Overfitting"、
 // "The Deflated Sharpe Ratio"。
+//
+// TODO(insyra#pending): Insyra 目前沒有 PBO/CSCV、通縮夏普，也沒有常態
+// 分布 CDF / 反函數（normPPF、normCDF），故以 Acklam 近似與 math.Erfc 自寫。
+// 描述統計（mean/std/skew/kurt）Insyra 已具備（main + stats 子套件），但為避免
+// 把此數值核心耦合到 Insyra 的 any 盒裝 DataList 與其相依樹，暫保留內聯版本。
+// 待 Insyra 提供對應能力後改用。決策與 issue 草稿見 docs/insyra-upstream-todo.md。
 
 // SharpePerObservation 回傳每期（非年化）夏普比率：平均報酬 / 母體標準差。
 func SharpePerObservation(returns []float64) float64 {
