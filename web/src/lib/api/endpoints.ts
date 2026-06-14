@@ -144,12 +144,31 @@ export interface BacktestRunBody {
 	monthly_amount?: string;
 }
 
+export interface WalkForwardBody {
+	symbols?: string[];
+	from?: string;
+	to?: string;
+	initial_cash: string;
+	target_weights?: Record<string, string>;
+	bands?: string[];
+	train_months?: number;
+	test_months?: number;
+	step_months?: number;
+	slippage_bps?: string;
+	objective?: 'sharpe' | 'return';
+}
+
 export const backtests = {
 	run: (body: BacktestRunBody) =>
 		api.post<BacktestRun>('/backtests/runs', { body, idempotencyKey: newIdempotencyKey() }),
 	list: (limit = 20) =>
 		api.get<Items<BacktestRun>>('/backtests/runs', { query: { limit } }).then((r) => r.items ?? []),
-	get: (id: string) => api.get<BacktestRun>(`/backtests/runs/${id}`)
+	get: (id: string) => api.get<BacktestRun>(`/backtests/runs/${id}`),
+	walkForward: (body: WalkForwardBody) =>
+		api.post<import('./types').WalkForwardReport>('/backtests/walk-forward', {
+			body,
+			idempotencyKey: newIdempotencyKey()
+		})
 };
 
 export const settings = {

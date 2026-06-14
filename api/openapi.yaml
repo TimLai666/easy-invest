@@ -618,6 +618,80 @@ paths:
                     items:
                       $ref: "#/components/schemas/BacktestRun"
                 required: [items]
+  /backtests/walk-forward:
+    post:
+      tags: [backtests]
+      summary: Walk-forward 樣本外驗證
+      description: >-
+        掃描多組再平衡區間，逐段以訓練期挑參數、緊接的測試期樣本外評估，
+        並回傳過擬合機率（PBO）與通縮夏普（DSR）等診斷。不寫入 backtest_runs。
+      x-required-scopes: [backtests:run]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                initial_cash: { type: string, description: 期初資金（必填，TWD） }
+                symbols: { type: array, items: { type: string } }
+                from: { type: string, format: date }
+                to: { type: string, format: date }
+                target_weights: { type: object, additionalProperties: { type: string } }
+                bands:
+                  type: array
+                  items: { type: string }
+                  description: 要掃描的再平衡區間（比例字串）；空值用預設
+                train_months: { type: integer, description: 訓練視窗月數，預設 24 }
+                test_months: { type: integer, description: 測試視窗月數，預設 6 }
+                step_months: { type: integer, description: 視窗滑動月數，預設 = test_months }
+                slippage_bps: { type: string, description: 單邊滑價（基點），預設 15 }
+                objective: { type: string, enum: [sharpe, return], description: 樣本內挑參數的目標 }
+              required: [initial_cash]
+      responses:
+        "200":
+          description: walk-forward 結果與過擬合診斷
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  oos_return: { type: string }
+                  oos_annualized: { type: string }
+                  oos_sharpe: { type: string }
+                  oos_max_drawdown: { type: string }
+                  pbo: { type: string, description: 過擬合機率 0~1，越低越好 }
+                  deflated_sharpe: { type: string, description: 通縮夏普（機率），> 0.95 才顯著 }
+                  observed_sharpe: { type: string }
+                  selected_label: { type: string }
+                  trials: { type: integer }
+                  folds:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        train_from: { type: string }
+                        train_to: { type: string }
+                        test_from: { type: string }
+                        test_to: { type: string }
+                        chosen_label: { type: string }
+                        chosen_band: { type: string }
+                        is_objective: { type: string }
+                        oos_return: { type: string }
+                        oos_sharpe: { type: string }
+                        trades: { type: integer }
+                  oos_equity_curve:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        date: { type: string }
+                        equity: { type: string }
+                  assumptions: { type: string }
+        "400":
+          $ref: "#/components/responses/Error"
   /backtests/runs/{id}:
     get:
       tags: [backtests]

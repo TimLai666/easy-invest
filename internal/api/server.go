@@ -106,6 +106,7 @@ func (s *Server) Routes() http.Handler {
 			r.Post("/reconciliation/diffs/{id}/resolve", s.requireScopes("reconciliation:write")(s.handleResolveReconciliationDiff))
 
 			r.Post("/backtests/runs", s.requireScopes("backtests:run")(s.handleCreateBacktestRun))
+			r.Post("/backtests/walk-forward", s.requireScopes("backtests:run")(s.handleWalkForward))
 			r.Get("/backtests/runs", s.requireScopes("backtests:read")(s.handleListBacktestRuns))
 			r.Get("/backtests/runs/{id}", s.requireScopes("backtests:read")(s.handleGetBacktestRun))
 		})

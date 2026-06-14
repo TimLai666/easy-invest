@@ -26,6 +26,22 @@ func (s *Server) handleCreateBacktestRun(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusCreated, run)
 }
 
+func (s *Server) handleWalkForward(w http.ResponseWriter, r *http.Request) {
+	principal, _ := auth.PrincipalFromContext(r.Context())
+	var req backtest.WalkForwardParams
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "validation_failed", "JSON 格式錯誤")
+		return
+	}
+	report, err := s.backtest.WalkForward(r.Context(), principal.UserID, req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "validation_failed", err.Error())
+		return
+	}
+	_ = s.auth.Audit(r.Context(), principal, "backtest.walk_forward", "backtest_runs", "", nil)
+	writeJSON(w, http.StatusOK, report)
+}
+
 func (s *Server) handleListBacktestRuns(w http.ResponseWriter, r *http.Request) {
 	principal, _ := auth.PrincipalFromContext(r.Context())
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))

@@ -325,6 +325,34 @@ export interface BacktestRun {
 	created_at: string;
 }
 
+export interface WalkForwardFold {
+	train_from: string;
+	train_to: string;
+	test_from: string;
+	test_to: string;
+	chosen_label: string;
+	chosen_band: string;
+	is_objective: string;
+	oos_return: string;
+	oos_sharpe: string;
+	trades: number;
+}
+
+export interface WalkForwardReport {
+	oos_return: string;
+	oos_annualized: string;
+	oos_sharpe: string;
+	oos_max_drawdown: string;
+	pbo: string;
+	deflated_sharpe: string;
+	observed_sharpe: string;
+	selected_label: string;
+	trials: number;
+	folds: WalkForwardFold[];
+	oos_equity_curve: { date: string; equity: string }[];
+	assumptions: string;
+}
+
 export interface Settings {
 	fee_rate: string;
 	fee_discount: string;

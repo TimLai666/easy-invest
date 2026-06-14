@@ -1,7 +1,12 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { backtests as backtestsApi, ApiError } from '$lib/api';
-	import type { BacktestRun, BacktestResultDetail, BacktestRunBody } from '$lib/api';
+	import type {
+		BacktestRun,
+		BacktestResultDetail,
+		BacktestRunBody,
+		WalkForwardReport
+	} from '$lib/api';
 	import {
 		formatMoney,
 		formatPercent,
@@ -37,6 +42,8 @@
 	import GaugeIcon from '@lucide/svelte/icons/gauge';
 	import AlertCircleIcon from '@lucide/svelte/icons/circle-alert';
 	import Loader2Icon from '@lucide/svelte/icons/loader-circle';
+	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
+	import FlaskConicalIcon from '@lucide/svelte/icons/flask-conical';
 
 	// 清單狀態
 	let runs = $state<BacktestRun[]>([]);
@@ -175,6 +182,72 @@
 	});
 
 	const trades = $derived(result?.strategy.trades ?? []);
+
+	// --- walk-forward 樣本外驗證 ---
+	let wfTrainMonths = $state('24');
+	let wfTestMonths = $state('6');
+	let wfBands = $state('0.02, 0.03, 0.05, 0.08, 0.10');
+	let wfReport = $state<WalkForwardReport | null>(null);
+	let wfLoading = $state(false);
+	let wfError = $state<unknown>(null);
+
+	const wfSeries = $derived.by<Series[]>(() => {
+		if (!wfReport?.oos_equity_curve?.length) return [];
+		return [
+			{
+				label: '樣本外權益',
+				color: chartPalette[3],
+				points: wfReport.oos_equity_curve.map((p) => ({ x: p.date, y: Number(p.equity) }))
+			}
+		];
+	});
+
+	// PBO：越低越好（< 0.5 偏綠、>= 0.5 偏紅）；DSR：>= 0.95 才算顯著。
+	const pboTone = $derived(
+		wfReport ? (Number(wfReport.pbo) < 0.5 ? 'text-down' : 'text-up') : ''
+	);
+	const dsrTone = $derived(
+		wfReport ? (Number(wfReport.deflated_sharpe) >= 0.95 ? 'text-down' : 'text-up') : ''
+	);
+
+	async function runWalkForward() {
+		if (!fInitialCash.trim()) {
+			toast.error('請先在上方填寫期初資金');
+			return;
+		}
+		let targetWeights: Record<string, string> | null;
+		try {
+			targetWeights = parseTargetWeights(fTargetWeights);
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : '目標權重格式錯誤');
+			return;
+		}
+		const bands = wfBands
+			.split(/[,\n]/)
+			.map((b) => b.trim())
+			.filter((b) => b.length > 0);
+		const symbols = parseSymbols(fSymbols);
+
+		wfLoading = true;
+		wfError = null;
+		try {
+			wfReport = await backtestsApi.walkForward({
+				initial_cash: fInitialCash.trim(),
+				from: fFrom || undefined,
+				to: fTo || undefined,
+				symbols: symbols.length ? symbols : undefined,
+				target_weights: targetWeights ?? undefined,
+				bands: bands.length ? bands : undefined,
+				train_months: Number(wfTrainMonths) || undefined,
+				test_months: Number(wfTestMonths) || undefined
+			});
+		} catch (err) {
+			wfError = err;
+			if (err instanceof ApiError) toast.error(err.message);
+		} finally {
+			wfLoading = false;
+		}
+	}
 </script>
 
 <div class="space-y-6">
@@ -448,6 +521,117 @@
 			</Card.Root>
 		</div>
 	</div>
+
+	<!-- Walk-forward 樣本外驗證 -->
+	<Card.Root>
+		<Card.Header>
+			<div class="flex flex-wrap items-center justify-between gap-2">
+				<div>
+					<Card.Title class="flex items-center gap-2"><FlaskConicalIcon class="size-5" />Walk-forward 樣本外驗證</Card.Title>
+					<Card.Description>
+						掃描多組再平衡區間，每段用訓練期挑參數、緊接的測試期樣本外評估，並量化過擬合風險。沿用上方的期初資金、標的與目標權重。
+					</Card.Description>
+				</div>
+			</div>
+		</Card.Header>
+		<Card.Content class="space-y-5">
+			<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+				<div class="space-y-1.5">
+					<Label for="wf-train">訓練視窗（月）</Label>
+					<Input id="wf-train" inputmode="numeric" bind:value={wfTrainMonths} />
+				</div>
+				<div class="space-y-1.5">
+					<Label for="wf-test">測試視窗（月）</Label>
+					<Input id="wf-test" inputmode="numeric" bind:value={wfTestMonths} />
+				</div>
+				<div class="space-y-1.5 sm:col-span-2">
+					<Label for="wf-bands">掃描的再平衡區間</Label>
+					<Input id="wf-bands" bind:value={wfBands} placeholder="0.02, 0.05, 0.10" />
+				</div>
+			</div>
+			<Button onclick={runWalkForward} disabled={wfLoading} variant="secondary">
+				{#if wfLoading}<Loader2Icon class="size-4 animate-spin" />驗證中{:else}<ShieldCheckIcon
+						class="size-4"
+					/>執行 walk-forward{/if}
+			</Button>
+
+			{#if wfError}
+				<Alert.Root variant="destructive">
+					<AlertCircleIcon class="size-4" />
+					<Alert.Title>無法執行 walk-forward</Alert.Title>
+					<Alert.Description>
+						{wfError instanceof ApiError ? wfError.message : '請確認歷史資料是否足夠涵蓋訓練＋測試視窗。'}
+					</Alert.Description>
+				</Alert.Root>
+			{:else if wfReport}
+				{@const wf = wfReport}
+				<!-- 過擬合診斷 -->
+				<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+					<StatCard label="過擬合機率 PBO" icon={ShieldCheckIcon}>
+						{#snippet value()}<span class={pboTone}>{formatPercent(wf.pbo, 1)}</span>{/snippet}
+						{#snippet footer()}越低越好；高代表樣本內最佳常在樣本外失效{/snippet}
+					</StatCard>
+					<StatCard label="通縮夏普 DSR" icon={GaugeIcon}>
+						{#snippet value()}<span class={dsrTone}>{formatPercent(wf.deflated_sharpe, 1)}</span>{/snippet}
+						{#snippet footer()}≥ 95% 才算顯著（已校正多重嘗試）{/snippet}
+					</StatCard>
+					<StatCard label="樣本外總報酬" icon={TrendingUpIcon}>
+						{#snippet value()}<span class={toneClass(toneOf(wf.oos_return))}>{formatPercent(wf.oos_return, 2, { sign: true })}</span>{/snippet}
+						{#snippet footer()}年化 {formatPercent(wf.oos_annualized, 2, { sign: true })}{/snippet}
+					</StatCard>
+					<StatCard label="樣本外最大回撤" icon={TrendingDownIcon}>
+						{#snippet value()}<span class="text-down">{formatPercent(wf.oos_max_drawdown, 2)}</span>{/snippet}
+						{#snippet footer()}整段樣本內最佳：{wf.selected_label}{/snippet}
+					</StatCard>
+				</div>
+
+				{#if wfSeries.length}
+					<LineChart series={wfSeries} yPrefix="$" />
+				{/if}
+
+				<!-- 每段結果 -->
+				<div>
+					<h3 class="mb-2 text-sm font-medium">各視窗結果（共 {wf.folds.length} 段）</h3>
+					<div class="scrollbar-thin overflow-x-auto rounded-lg border">
+						<Table.Root>
+							<Table.Header>
+								<Table.Row>
+									<Table.Head>訓練期</Table.Head>
+									<Table.Head>測試期</Table.Head>
+									<Table.Head>選用區間</Table.Head>
+									<Table.Head class="text-right">樣本外報酬</Table.Head>
+									<Table.Head class="text-right">樣本外夏普</Table.Head>
+									<Table.Head class="text-right">交易數</Table.Head>
+								</Table.Row>
+							</Table.Header>
+							<Table.Body>
+								{#each wf.folds as f, i (i)}
+									<Table.Row class="hover:bg-muted/40">
+										<Table.Cell class="whitespace-nowrap text-xs">{f.train_from} ~ {f.train_to}</Table.Cell>
+										<Table.Cell class="whitespace-nowrap text-xs">{f.test_from} ~ {f.test_to}</Table.Cell>
+										<Table.Cell><Badge variant="secondary" class="font-normal">{f.chosen_label}</Badge></Table.Cell>
+										<Table.Cell class="text-right">
+											<span class={toneClass(toneOf(f.oos_return))}>{formatPercent(f.oos_return, 2, { sign: true })}</span>
+										</Table.Cell>
+										<Table.Cell class="tnum text-right">{Number(f.oos_sharpe).toFixed(2)}</Table.Cell>
+										<Table.Cell class="tnum text-right">{f.trades}</Table.Cell>
+									</Table.Row>
+								{/each}
+							</Table.Body>
+						</Table.Root>
+					</div>
+				</div>
+
+				<div class="text-muted-foreground bg-muted/40 rounded-lg border border-dashed p-3 text-xs leading-relaxed">
+					{wf.assumptions}
+				</div>
+			{:else}
+				<div class="text-muted-foreground bg-muted/30 rounded-lg border border-dashed p-6 text-center text-sm">
+					執行後會顯示樣本外績效，以及過擬合機率（PBO）與通縮夏普（DSR）兩項診斷。
+				</div>
+			{/if}
+		</Card.Content>
+	</Card.Root>
 
 	<!-- 歷史回測 -->
 	<Card.Root>
