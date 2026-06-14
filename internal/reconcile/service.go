@@ -284,6 +284,12 @@ func (s *Service) CreateRun(ctx context.Context, userID, snapshotID string) (Run
 		if err != nil {
 			return Run{}, err
 		}
+		// insertDiff 的 RETURNING 不 join assets，回傳的 diff 沒有 symbol；
+		// CreateRun 已知這筆差異對應的 symbol，補上讓回傳結果與 GetRun 一致。
+		if d.Symbol != "" {
+			symbol := d.Symbol
+			inserted.Symbol = &symbol
+		}
 		run.Diffs = append(run.Diffs, inserted)
 	}
 
