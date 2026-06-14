@@ -17,8 +17,9 @@ type BenchmarkInput struct {
 	Asset         AssetMeta
 	Bars          []Bar
 	InitialCash   decimal.Decimal
-	MonthlyAmount decimal.Decimal // DCA 每月投入金額（含手續費的總支出上限）
+	MonthlyAmount decimal.Decimal      // DCA 每月投入金額（含手續費的總支出上限）
 	Fees          twmarket.FeeSettings
+	SlippageBps   decimal.Decimal      // 買進單邊滑價，與策略回測保持一致的成交假設
 }
 
 // BuyAndHold 是「期初一次買進並持有到期末」基準：
@@ -35,7 +36,7 @@ func BuyAndHold(input BenchmarkInput) (Result, error) {
 	result := Result{InitialEquity: input.InitialCash}
 	for i, bar := range bars {
 		if i == 0 {
-			if trade, ok := buyWithin(bar.Date, input.Symbol, cash, bar.Close, fees); ok {
+			if trade, ok := buyWithin(bar.Date, input.Symbol, cash, applySlippage(bar.Close, "buy", input.SlippageBps), fees); ok {
 				cash = cash.Add(trade.CashDelta)
 				shares = shares.Add(trade.QuantityShares)
 				result.Trades = append(result.Trades, trade)
@@ -71,7 +72,7 @@ func DCA(input BenchmarkInput) (Result, error) {
 			if budget.GreaterThan(cash) {
 				budget = cash
 			}
-			if trade, ok := buyWithin(bar.Date, input.Symbol, budget, bar.Close, fees); ok {
+			if trade, ok := buyWithin(bar.Date, input.Symbol, budget, applySlippage(bar.Close, "buy", input.SlippageBps), fees); ok {
 				cash = cash.Add(trade.CashDelta)
 				shares = shares.Add(trade.QuantityShares)
 				result.Trades = append(result.Trades, trade)

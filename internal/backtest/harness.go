@@ -15,9 +15,10 @@ import (
 	"github.com/tingz/easy-invest/internal/twmarket"
 )
 
-// Bar 是單一交易日的日 K 摘要；回測只使用收盤價。
+// Bar 是單一交易日的日 K 摘要；回測使用開盤價（次日成交）與收盤價（估值與決策）。
 type Bar struct {
 	Date  time.Time
+	Open  decimal.Decimal // 次日開盤成交用；零值時退回以收盤價成交
 	Close decimal.Decimal
 }
 
@@ -28,6 +29,18 @@ type AssetMeta struct {
 	LotSize   int    // 一張的股數；0 視為台股預設 1000
 }
 
+// Execution 控制回測的成交假設，是回測「真實度」的核心參數。
+//
+// 為什麼重要：若用 T 日收盤決策又用 T 日收盤成交，等於用了收盤後才知道的價格，
+// 屬於 look-ahead bias，會讓回測過度樂觀。預設改為「T 日收盤決策、T+1 日開盤成交」，
+// 並加上單邊滑價，貼近真實下單情境。
+type Execution struct {
+	// FillTiming："next_open"（預設，次日開盤成交）或 "close"（當日收盤成交）。
+	FillTiming string
+	// SlippageBps 是單邊滑價（基點，1 bps = 0.01%）：買進成交價往上、賣出往下偏移。
+	SlippageBps decimal.Decimal
+}
+
 // Input 是回測核心的完整輸入。
 type Input struct {
 	Bars        map[string][]Bar     // symbol → 日 K（日期昇冪；未排序也會先排序）
@@ -35,6 +48,7 @@ type Input struct {
 	InitialCash decimal.Decimal
 	Settings    strategy.Settings
 	Fees        twmarket.FeeSettings // 零值欄位以台股預設補齊，並覆寫 Settings.Fees
+	Execution   Execution            // 成交假設；零值 FillTiming 視為 next_open
 }
 
 // Trade 是回測過程中的一筆模擬成交。
@@ -93,15 +107,21 @@ func Simulate(input Input) (Result, error) {
 		return Result{}, errors.New("歷史行情中沒有任何交易日")
 	}
 	closes := closeIndex(input.Bars)
+	opens := openIndex(input.Bars)
 	rebalanceDays := monthlyFirstTradingDaySet(days)
 
 	fees := strategy.NormalizeFees(input.Fees)
 	settings := input.Settings
 	settings.Fees = fees
+	nextOpenFill := input.Execution.FillTiming != "close" // 預設次日開盤成交
+	slippage := input.Execution.SlippageBps
 
 	cash := input.InitialCash
 	positions := map[string]decimal.Decimal{}
 	lastClose := map[string]decimal.Decimal{}
+
+	// pending 是「已在前一個再平衡日決策、待次日開盤成交」的建議。
+	var pending []strategy.Intent
 
 	result := Result{InitialEquity: input.InitialCash}
 	for _, day := range days {
@@ -111,25 +131,30 @@ func Simulate(input Input) (Result, error) {
 				lastClose[symbol] = c
 			}
 		}
+		// 先以本日開盤價結清前一個再平衡日的掛單（次日開盤成交，避免 look-ahead）。
+		if len(pending) > 0 {
+			executeIntents(day, key, pending, positions, &cash, &result, input.Assets, fees, settings.PreferWholeLot, slippage, opens, closes, true)
+			pending = nil
+		}
 		if rebalanceDays[key] {
 			stratInput := buildStrategyInput(cash, positions, lastClose, input.Assets, settings)
 			intents := strategy.Rebalance(stratInput)
 			result.Rebalances = append(result.Rebalances, RebalanceRecord{Date: day, Input: stratInput, Intents: intents})
-			// 依策略輸出順序執行：先賣後買，現金才足夠。
-			for _, intent := range intents {
-				switch intent.Action {
-				case "sell":
-					if trade, ok := executeSell(day, intent, positions, &cash, input.Assets, fees); ok {
-						result.Trades = append(result.Trades, trade)
-					}
-				case "buy":
-					if trade, ok := executeBuy(day, intent, positions, &cash, input.Assets, fees, settings.PreferWholeLot); ok {
-						result.Trades = append(result.Trades, trade)
-					}
-				}
+			if nextOpenFill {
+				pending = intents // 次日開盤成交
+			} else {
+				executeIntents(day, key, intents, positions, &cash, &result, input.Assets, fees, settings.PreferWholeLot, slippage, opens, closes, false)
 			}
 		}
 		result.EquityCurve = append(result.EquityCurve, EquityPoint{Date: day, Equity: equityOf(cash, positions, lastClose)})
+	}
+
+	// 次日開盤模式下，若最後一個交易日才再平衡，掛單無次日可成交，
+	// 退而以最後一日收盤價成交（保守 fallback），並修正最後一點權益。
+	if len(pending) > 0 {
+		last := days[len(days)-1]
+		executeIntents(last, dateKey(last), pending, positions, &cash, &result, input.Assets, fees, settings.PreferWholeLot, slippage, opens, closes, false)
+		result.EquityCurve[len(result.EquityCurve)-1].Equity = equityOf(cash, positions, lastClose)
 	}
 
 	result.FinalCash = cash
@@ -137,6 +162,54 @@ func Simulate(input Input) (Result, error) {
 	result.FinalEquity = result.EquityCurve[len(result.EquityCurve)-1].Equity
 	fillMetrics(&result)
 	return result, nil
+}
+
+// executeIntents 依策略輸出順序（先賣後買）成交一批建議。
+// useOpen=true 以該日開盤價成交（次日開盤模式），否則以收盤價成交。
+func executeIntents(day time.Time, key string, intents []strategy.Intent, positions map[string]decimal.Decimal, cash *decimal.Decimal, result *Result, assets map[string]AssetMeta, fees twmarket.FeeSettings, preferWholeLot bool, slippageBps decimal.Decimal, opens, closes map[string]map[string]decimal.Decimal, useOpen bool) {
+	for _, intent := range intents {
+		base := fillBasePrice(intent.Symbol, key, opens, closes, useOpen)
+		if base.LessThanOrEqual(decimal.Zero) {
+			continue
+		}
+		switch intent.Action {
+		case "sell":
+			price := applySlippage(base, "sell", slippageBps)
+			if trade, ok := executeSell(day, intent, price, positions, cash, assets, fees); ok {
+				result.Trades = append(result.Trades, trade)
+			}
+		case "buy":
+			price := applySlippage(base, "buy", slippageBps)
+			if trade, ok := executeBuy(day, intent, price, positions, cash, assets, fees, preferWholeLot); ok {
+				result.Trades = append(result.Trades, trade)
+			}
+		}
+	}
+}
+
+// fillBasePrice 取成交基準價：次日開盤模式優先用開盤價，缺開盤價時退回收盤價。
+func fillBasePrice(symbol, key string, opens, closes map[string]map[string]decimal.Decimal, useOpen bool) decimal.Decimal {
+	if useOpen {
+		if o, ok := opens[symbol][key]; ok && o.GreaterThan(decimal.Zero) {
+			return o
+		}
+	}
+	if c, ok := closes[symbol][key]; ok {
+		return c
+	}
+	return decimal.Zero
+}
+
+// applySlippage 對成交價套用單邊滑價：買進往上、賣出往下。
+func applySlippage(price decimal.Decimal, side string, bps decimal.Decimal) decimal.Decimal {
+	if bps.LessThanOrEqual(decimal.Zero) || price.LessThanOrEqual(decimal.Zero) {
+		return price
+	}
+	factor := bps.Div(decimal.NewFromInt(10000))
+	if side == "buy" {
+		return price.Mul(decimal.NewFromInt(1).Add(factor))
+	}
+	return price.Mul(decimal.NewFromInt(1).Sub(factor))
 }
 
 // buildStrategyInput 把回測當下狀態整理成策略輸入：
@@ -174,17 +247,17 @@ func buildStrategyInput(cash decimal.Decimal, positions, lastClose map[string]de
 	return strategy.Input{Cash: cash, Positions: stratPositions, Settings: settings}
 }
 
-// executeSell 以收盤價賣出，入帳金額 = 成交金額 − 手續費 − 證交稅。
-func executeSell(day time.Time, intent strategy.Intent, positions map[string]decimal.Decimal, cash *decimal.Decimal, assets map[string]AssetMeta, fees twmarket.FeeSettings) (Trade, bool) {
+// executeSell 以指定成交價賣出，入帳金額 = 成交金額 − 手續費 − 證交稅。
+func executeSell(day time.Time, intent strategy.Intent, price decimal.Decimal, positions map[string]decimal.Decimal, cash *decimal.Decimal, assets map[string]AssetMeta, fees twmarket.FeeSettings) (Trade, bool) {
 	held := positions[intent.Symbol]
 	qty := intent.QuantityShares
 	if qty.GreaterThan(held) {
 		qty = held
 	}
-	if qty.LessThanOrEqual(decimal.Zero) || intent.EstimatedPrice.LessThanOrEqual(decimal.Zero) {
+	if qty.LessThanOrEqual(decimal.Zero) || price.LessThanOrEqual(decimal.Zero) {
 		return Trade{}, false
 	}
-	gross := qty.Mul(intent.EstimatedPrice)
+	gross := qty.Mul(price)
 	fee := twmarket.EstimateFee(gross, fees)
 	tax := twmarket.EstimateSecuritiesTax(gross, assets[intent.Symbol].AssetType)
 	net := gross.Sub(fee).Sub(tax)
@@ -192,16 +265,15 @@ func executeSell(day time.Time, intent strategy.Intent, positions map[string]dec
 	positions[intent.Symbol] = held.Sub(qty)
 	return Trade{
 		Date: day, Symbol: intent.Symbol, Action: "sell",
-		QuantityShares: qty, Price: intent.EstimatedPrice,
+		QuantityShares: qty, Price: price,
 		GrossAmount: gross, Fee: fee, Tax: tax, CashDelta: net,
 	}, true
 }
 
-// executeBuy 以收盤價買進，支出 = 成交金額 + 手續費。
+// executeBuy 以指定成交價買進，支出 = 成交金額 + 手續費。
 // 策略的預算估算不含買進手續費，現金不足時逐步調降股數（保守處理）。
-func executeBuy(day time.Time, intent strategy.Intent, positions map[string]decimal.Decimal, cash *decimal.Decimal, assets map[string]AssetMeta, fees twmarket.FeeSettings, preferWholeLot bool) (Trade, bool) {
+func executeBuy(day time.Time, intent strategy.Intent, price decimal.Decimal, positions map[string]decimal.Decimal, cash *decimal.Decimal, assets map[string]AssetMeta, fees twmarket.FeeSettings, preferWholeLot bool) (Trade, bool) {
 	qty := intent.QuantityShares
-	price := intent.EstimatedPrice
 	if qty.LessThanOrEqual(decimal.Zero) || price.LessThanOrEqual(decimal.Zero) {
 		return Trade{}, false
 	}
@@ -328,6 +400,18 @@ func closeIndex(bars map[string][]Bar) map[string]map[string]decimal.Decimal {
 		byDate := make(map[string]decimal.Decimal, len(series))
 		for _, bar := range series {
 			byDate[dateKey(normalizeDate(bar.Date))] = bar.Close
+		}
+		index[symbol] = byDate
+	}
+	return index
+}
+
+func openIndex(bars map[string][]Bar) map[string]map[string]decimal.Decimal {
+	index := make(map[string]map[string]decimal.Decimal, len(bars))
+	for symbol, series := range bars {
+		byDate := make(map[string]decimal.Decimal, len(series))
+		for _, bar := range series {
+			byDate[dateKey(normalizeDate(bar.Date))] = bar.Open
 		}
 		index[symbol] = byDate
 	}

@@ -62,6 +62,7 @@ func TestRunFinalRebalanceMatchesDirectStrategyCall(t *testing.T) {
 		InitialCash: decimal.NewFromInt(100000),
 		Settings:    testSettings(),
 		Fees:        fees,
+		Execution:   Execution{FillTiming: "close"}, // 釘住收盤成交以驗證手算數值
 	})
 	if err != nil {
 		t.Fatalf("Simulate: %v", err)
@@ -114,6 +115,7 @@ func TestRunHandCalculatedEngineState(t *testing.T) {
 		InitialCash: decimal.NewFromInt(100000),
 		Settings:    testSettings(),
 		Fees:        twmarket.DefaultFeeSettings(),
+		Execution:   Execution{FillTiming: "close"}, // 釘住收盤成交以驗證手算數值
 	})
 	if err != nil {
 		t.Fatalf("Simulate: %v", err)
@@ -150,6 +152,62 @@ func TestRunHandCalculatedEngineState(t *testing.T) {
 	}
 	if !result.AnnualizedReturn.GreaterThan(decimal.Zero) {
 		t.Fatalf("annualized return = %s, want > 0", result.AnnualizedReturn)
+	}
+}
+
+// 次日開盤成交：在 T 日收盤決策，但以 T+1 日開盤價成交（避免 look-ahead），
+// 並可套用單邊滑價。
+func TestRunNextOpenFillUsesNextDayOpenWithSlippage(t *testing.T) {
+	// 1/02 是每月第一個交易日（決策日，收盤 100）；1/03 為成交日（開盤 101）。
+	bars := map[string][]Bar{
+		"0050": {
+			{Date: day("2024-01-02"), Open: dec("100"), Close: dec("100")},
+			{Date: day("2024-01-03"), Open: dec("101"), Close: dec("105")},
+		},
+	}
+	settings := strategy.Settings{
+		TargetWeights:  map[string]decimal.Decimal{"0050": dec("0.4")},
+		RebalanceBand:  dec("0.005"),
+		MinTradeAmount: decimal.NewFromInt(500),
+	}
+
+	// 無滑價：成交價應為次日開盤 101，而非決策日收盤 100。
+	noSlip, err := Simulate(Input{
+		Bars: bars, Assets: testAssets(), InitialCash: decimal.NewFromInt(100000),
+		Settings: settings, Fees: twmarket.DefaultFeeSettings(),
+		Execution: Execution{FillTiming: "next_open"},
+	})
+	if err != nil {
+		t.Fatalf("Simulate: %v", err)
+	}
+	if len(noSlip.Trades) != 1 {
+		t.Fatalf("trades = %d, want 1", len(noSlip.Trades))
+	}
+	trade := noSlip.Trades[0]
+	if got := dateKey(trade.Date); got != "2024-01-03" {
+		t.Fatalf("成交日 = %s, want 2024-01-03（次日）", got)
+	}
+	if !trade.Price.Equal(dec("101")) {
+		t.Fatalf("成交價 = %s, want 101（次日開盤，非決策日收盤 100）", trade.Price)
+	}
+	if !trade.QuantityShares.Equal(decimal.NewFromInt(400)) {
+		t.Fatalf("成交股數 = %s, want 400", trade.QuantityShares)
+	}
+
+	// 100 bps 單邊滑價：買進成交價 = 101 × 1.01 = 102.01。
+	withSlip, err := Simulate(Input{
+		Bars: bars, Assets: testAssets(), InitialCash: decimal.NewFromInt(100000),
+		Settings: settings, Fees: twmarket.DefaultFeeSettings(),
+		Execution: Execution{FillTiming: "next_open", SlippageBps: decimal.NewFromInt(100)},
+	})
+	if err != nil {
+		t.Fatalf("Simulate: %v", err)
+	}
+	if len(withSlip.Trades) != 1 {
+		t.Fatalf("trades = %d, want 1", len(withSlip.Trades))
+	}
+	if !withSlip.Trades[0].Price.Equal(dec("102.01")) {
+		t.Fatalf("含滑價成交價 = %s, want 102.01", withSlip.Trades[0].Price)
 	}
 }
 

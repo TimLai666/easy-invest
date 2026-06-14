@@ -38,7 +38,11 @@ type RunParams struct {
 	TargetWeights   map[string]decimal.Decimal `json:"target_weights"`   // 空值時讀取 user_settings
 	BenchmarkSymbol string                     `json:"benchmark_symbol"` // 預設 0050
 	MonthlyAmount   decimal.Decimal            `json:"monthly_amount"`   // DCA 基準每月金額；零值時以期初資金均分月數
+	SlippageBps     decimal.Decimal            `json:"slippage_bps"`     // 單邊滑價（基點）；零值時用預設 15 bps
 }
+
+// DefaultSlippageBps 是回測預設單邊滑價（基點）；貼近台股實際成交的保守假設。
+var DefaultSlippageBps = decimal.NewFromInt(15)
 
 // Run 是 backtest_runs 的一筆紀錄。
 type Run struct {
@@ -70,6 +74,9 @@ func (s *Service) CreateRun(ctx context.Context, userID string, params RunParams
 	}
 	if params.BenchmarkSymbol == "" {
 		params.BenchmarkSymbol = DefaultBenchmarkSymbol
+	}
+	if params.SlippageBps.LessThanOrEqual(decimal.Zero) {
+		params.SlippageBps = DefaultSlippageBps
 	}
 	params.TargetWeights = weights
 
@@ -188,7 +195,8 @@ func (s *Service) compute(params RunParams, settings userSettings, weights map[s
 			MinTradeAmount: settings.MinTradeAmount,
 			PreferWholeLot: settings.PreferWholeLot,
 		},
-		Fees: settings.Fees,
+		Fees:      settings.Fees,
+		Execution: Execution{FillTiming: "next_open", SlippageBps: params.SlippageBps},
 	})
 	if err != nil {
 		return nil, err
@@ -196,8 +204,9 @@ func (s *Service) compute(params RunParams, settings userSettings, weights map[s
 
 	payload := map[string]any{
 		"strategy": toResultJSON(strategyResult),
-		"assumptions": "以日終收盤價成交（保守假設）；賣出扣手續費與證交稅、買進加計手續費；" +
-			"每月第一個交易日再平衡。結果為歷史模擬，不代表未來績效。",
+		"assumptions": "每月第一個交易日以當日收盤資料決策、隔一個交易日以開盤價成交（避免 look-ahead），" +
+			"並套用單邊滑價 " + params.SlippageBps.String() + " bps；賣出扣手續費與證交稅、買進加計手續費。" +
+			"結果為歷史模擬，不代表未來績效。",
 	}
 
 	// 基準：行情齊備才計算，缺資料時在結果中註記而不是整筆失敗。
@@ -219,6 +228,7 @@ func (s *Service) compute(params RunParams, settings userSettings, weights map[s
 			Bars:        benchmarkBars,
 			InitialCash: params.InitialCash,
 			Fees:        settings.Fees,
+			SlippageBps: params.SlippageBps,
 		}
 		if buyHold, err := BuyAndHold(benchmarkInput); err == nil {
 			payload["benchmark_buy_hold"] = toResultJSON(buyHold)
@@ -236,7 +246,8 @@ func (s *Service) compute(params RunParams, settings userSettings, weights map[s
 // 市場資料為全域共用，無 user_id 欄位；使用者隔離由 backtest_runs 負責。
 func (s *Service) loadBars(ctx context.Context, symbols []string, from, to string) (map[string][]Bar, map[string]AssetMeta, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT a.symbol, a.id::text, a.asset_type, a.lot_size, b.bar_date, b.close::text
+		SELECT a.symbol, a.id::text, a.asset_type, a.lot_size, b.bar_date,
+		       b.close::text, COALESCE(b.open::text, '')
 		FROM market_daily_bars b
 		JOIN assets a ON a.id = b.asset_id
 		WHERE b.is_latest = true
@@ -252,13 +263,14 @@ func (s *Service) loadBars(ctx context.Context, symbols []string, from, to strin
 	bars := map[string][]Bar{}
 	assets := map[string]AssetMeta{}
 	for rows.Next() {
-		var symbol, assetID, assetType, closeText string
+		var symbol, assetID, assetType, closeText, openText string
 		var lotSize int
 		var bar Bar
-		if err := rows.Scan(&symbol, &assetID, &assetType, &lotSize, &bar.Date, &closeText); err != nil {
+		if err := rows.Scan(&symbol, &assetID, &assetType, &lotSize, &bar.Date, &closeText, &openText); err != nil {
 			return nil, nil, err
 		}
 		bar.Close = num.Parse(closeText)
+		bar.Open = num.Parse(openText)
 		bars[symbol] = append(bars[symbol], bar)
 		assets[symbol] = AssetMeta{AssetID: assetID, AssetType: assetType, LotSize: lotSize}
 	}
