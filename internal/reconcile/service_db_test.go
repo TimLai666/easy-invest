@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
 
 	"github.com/tingz/easy-invest/internal/ledger"
 )
@@ -214,7 +215,7 @@ func TestReconcileFlowWithDatabase(t *testing.T) {
 	if source != "reconciliation" {
 		t.Fatalf("source = %q, want reconciliation", source)
 	}
-	if gross != "5000" {
+	if !decimal.RequireFromString(gross).Equal(decimal.NewFromInt(5000)) {
 		t.Fatalf("gross_amount = %q, want 5000", gross)
 	}
 	if tradeDate != "2026-04-15" {

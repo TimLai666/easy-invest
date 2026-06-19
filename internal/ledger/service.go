@@ -734,7 +734,10 @@ func (s *Service) rebuildLotsTx(ctx context.Context, tx pgx.Tx, userID string) e
 		var prepared preparedEvent
 		var assetID, symbol, name, assetType, market, currency sql.NullString
 		var lotSize sql.NullInt64
-		var q, price, gross, fee, tax, cashDelta string
+		// quantity_shares / price / gross_amount 可為 NULL（如現金存提無股數），
+		// 必須用 NullString 接，否則 NULL 會導致 scan 失敗、整個 void 重建出錯。
+		var q, price, gross sql.NullString
+		var fee, tax, cashDelta string
 		if err := rows.Scan(&prepared.ID, &prepared.UserID, &assetID, &symbol, &name, &assetType, &market, &currency, &lotSize,
 			&prepared.EventType, &prepared.TradeDate, &q, &price, &gross, &fee, &tax, &cashDelta,
 			&prepared.Currency, &prepared.FeeSource, &prepared.Source, &prepared.Notes, &prepared.Metadata, &prepared.CreatedAt); err != nil {
@@ -745,10 +748,10 @@ func (s *Service) rebuildLotsTx(ctx context.Context, tx pgx.Tx, userID string) e
 			prepared.Symbol = &symbol.String
 			prepared.Asset = &assetRow{ID: assetID.String, Symbol: symbol.String, Name: name.String, AssetType: assetType.String, Market: market.String, Currency: currency.String, LotSize: int(lotSize.Int64)}
 		}
-		prepared.Quantity = num.Parse(q)
+		prepared.Quantity = num.Parse(q.String)
 		prepared.QuantityAbs = prepared.Quantity.Abs()
-		prepared.Price = num.Parse(price)
-		prepared.Gross = num.Parse(gross)
+		prepared.Price = num.Parse(price.String)
+		prepared.Gross = num.Parse(gross.String)
 		prepared.Fee = num.Parse(fee)
 		prepared.Tax = num.Parse(tax)
 		prepared.CashDelta = num.Parse(cashDelta)

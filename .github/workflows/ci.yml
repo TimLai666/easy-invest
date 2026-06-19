@@ -34,8 +34,9 @@ jobs:
           cache: true
       - run: go mod download
       - run: go vet ./...
-      - run: go test ./...
+      # 先套用 migration，讓需要 TEST_DATABASE_URL 的整合測試能實際執行（而非 skip）。
       - run: go run ./cmd/migrate up
+      - run: go test ./...
       - run: go run ./cmd/server & sleep 5 && curl --fail http://localhost:8080/healthz
 
   frontend:
