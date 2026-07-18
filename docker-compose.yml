@@ -55,6 +55,13 @@ services:
       TPEX_STOCK_DAY_URL: ${TPEX_STOCK_DAY_URL:-https://www.tpex.org.tw/www/zh-tw/afterTrading/tradingStock}
       MARKET_IMPORT_ON_START: ${MARKET_IMPORT_ON_START:-true}
       DATABASE_URL: postgres://easy_invest:easy_invest@postgres:5432/easy_invest?sslmode=disable
+      # 每日備份：pg_dump custom 格式，保留最新 14 份，預設每日 02:00（台北）。
+      BACKUP_DIR: /backups
+      BACKUP_KEEP: ${BACKUP_KEEP:-14}
+      BACKUP_CRON: ${BACKUP_CRON:-0 2 * * *}
+      BACKUP_ON_START: ${BACKUP_ON_START:-false}
+    volumes:
+      - postgres-backups:/backups
     depends_on:
       postgres:
         condition: service_healthy
@@ -70,3 +77,4 @@ services:
 
 volumes:
   postgres-data:
+  postgres-backups:

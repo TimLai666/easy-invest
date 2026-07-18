@@ -86,6 +86,25 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 每日備份：pg_dump custom 格式 + 保留最新 BackupKeep 份。還原步驟見 README。
+	runBackup := func(trigger string) {
+		log.Info("備份開始", "trigger", trigger, "dir", cfg.BackupDir)
+		path, err := platform.Backup(ctx, cfg.DatabaseURL, cfg.BackupDir, time.Now().In(taipei))
+		if err != nil {
+			log.Error("備份失敗", "trigger", trigger, "error", err)
+			return
+		}
+		pruned, err := platform.PruneBackups(cfg.BackupDir, cfg.BackupKeep)
+		if err != nil {
+			log.Warn("備份輪替清理失敗", "error", err)
+		}
+		log.Info("備份完成", "trigger", trigger, "file", path, "pruned", pruned, "keep", cfg.BackupKeep)
+	}
+	if _, err := scheduler.AddFunc(cfg.BackupCron, func() { runBackup("cron") }); err != nil {
+		log.Error("排程註冊失敗", "job", "backup", "error", err)
+		os.Exit(1)
+	}
+
 	// 每週日 08:00：同步證券清單；12 月時順便確保下一年度交易日曆已入庫。
 	if _, err := scheduler.AddFunc("0 8 * * 0", func() {
 		if result, err := pipeline.SyncSecuritiesList(ctx); err != nil {
@@ -113,6 +132,10 @@ func main() {
 	// MARKET_IMPORT_ON_START：啟動先跑一次 catch-up，停機多久都能把缺口補回來。
 	if cfg.MarketImportOnStart {
 		go runCatchUp("startup")
+	}
+	// BACKUP_ON_START：啟動先備份一次（供還原演練或首次建立基準備份）。
+	if cfg.BackupOnStart {
+		go runBackup("startup")
 	}
 
 	stop := make(chan os.Signal, 1)

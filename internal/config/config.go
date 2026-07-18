@@ -24,6 +24,12 @@ type Config struct {
 	MarketImportOnStart bool
 	// MarketBackfillMonths 是歷史回補窗口（月），詳見 marketdata.PipelineConfig。
 	MarketBackfillMonths int
+
+	// 資料庫備份（worker 每日 pg_dump + 輪替）。
+	BackupDir     string // 備份輸出目錄（容器內掛載卷）
+	BackupKeep    int    // 保留份數，超出則刪最舊
+	BackupCron    string // 5 欄位 cron（台北時區）
+	BackupOnStart bool   // 啟動時先跑一次（供還原演練）
 }
 
 func Load() Config {
@@ -43,6 +49,11 @@ func Load() Config {
 		TPExStockDayURL:      env("TPEX_STOCK_DAY_URL", "https://www.tpex.org.tw/www/zh-tw/afterTrading/tradingStock"),
 		MarketImportOnStart:  envBool("MARKET_IMPORT_ON_START", true),
 		MarketBackfillMonths: envInt("MARKET_BACKFILL_MONTHS", 24),
+
+		BackupDir:     env("BACKUP_DIR", "/backups"),
+		BackupKeep:    envInt("BACKUP_KEEP", 14),
+		BackupCron:    env("BACKUP_CRON", "0 2 * * *"),
+		BackupOnStart: envBool("BACKUP_ON_START", false),
 	}
 }
 

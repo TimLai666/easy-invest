@@ -47,6 +47,35 @@ curl -X POST http://localhost:8080/api/v1/auth/register \
 - 券商快照匯入與基本股數差異對帳。
 - 回測 run 建立與查詢，重用策略核心並輸出策略、定期定額與買進持有基準。
 - worker 會定期嘗試匯入 TWSE OpenAPI 當日全市場日終行情，成功或失敗都會留下 `ingestion_runs` 紀錄。
+- worker 每日以 `pg_dump`（custom 格式）備份資料庫並輪替保留最新 14 份，見下方「備份與還原」。
+
+## 備份與還原
+
+worker 每日（預設台北時間 02:00，`BACKUP_CRON`）以 `pg_dump` custom 格式把資料庫備份到 `BACKUP_DIR`（compose 掛載於具名卷 `postgres-backups`），只保留最新 `BACKUP_KEEP`（預設 14）份。設 `BACKUP_ON_START=true` 可在 worker 啟動時立即備份一次（首次建立基準或演練用）。
+
+備份檔命名為 `easy_invest_<YYYYMMDD_HHMMSS>.dump`。列出現有備份：
+
+```bash
+docker compose exec worker ls -la /backups
+```
+
+**還原步驟**（把某份備份還原到一個新資料庫，確認無誤再切換；已實測 assets/ledger_events 筆數完全一致）：
+
+```bash
+# 1) 建立還原目標資料庫
+docker compose exec postgres psql -U easy_invest -d easy_invest \
+  -c "CREATE DATABASE easy_invest_restore;"
+
+# 2) 還原指定備份（worker 容器可讀到 /backups）
+docker compose exec worker \
+  pg_restore --no-owner --no-privileges \
+  --dbname "postgres://easy_invest:easy_invest@postgres:5432/easy_invest_restore" \
+  /backups/easy_invest_YYYYMMDD_HHMMSS.dump
+
+# 3) 抽查筆數無誤後，停服務、改 DATABASE_URL 指向還原庫，或改名切換
+```
+
+> 手動立即備份一次：`docker compose exec worker sh -c 'pg_dump --format=custom --no-owner --no-privileges --file /backups/manual_$(date +%Y%m%d_%H%M%S).dump --dbname "$DATABASE_URL"'`
 
 ## 前端
 
