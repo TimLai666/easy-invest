@@ -4,6 +4,11 @@ package reconcile
 // 每家券商一個 parser，實作 PositionCSVParser 後以 RegisterCSVParser 註冊；
 // API 層依使用者選的格式名稱呼叫 ParsePositionsCSV，把券商檔案統一轉成 BrokerPositionInput
 //（數量一律為「股」，與 docs/tw-market-rules.md 的單位規則一致）。
+//
+// TODO(insyra#188): 本解析器刻意用 encoding/csv + shopspring/decimal 自寫，而非
+// insyra.ReadCSV。實測 Insyra v0.3.0 的欄位級型別推斷會把台股代號 0050 讀成 int64 50
+// （開頭 0 遺失）、金額讀成 float64、空值變 NaN，會損毀財務資料，且無關閉推斷的選項。
+// 待 insyra#188（no-inference / 讀為原始字串）上游支援後再評估採用。
 
 import (
 	"encoding/csv"
