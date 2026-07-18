@@ -1,8 +1,8 @@
 package backtest
 
-// TODO(insyra#178): walk-forward 切片與樣本外彙總，Insyra 未提供，自寫於本套件。
-// TODO(insyra#175): （年化）夏普與最大回撤等投組績效指標，Insyra 未提供，自寫。
-// 待上游補上後改用。決策見 docs/insyra-upstream-todo.md。
+// walk-forward 的月切訓練/測試編排保留於本套件（與 strategy.Rebalance / Simulate
+// 深度整合）；統計核心（夏普、PBO、通縮夏普）已改用 Insyra v0.3.0 的 quant 套件，
+// 見 overfit.go 與 docs/insyra-upstream-todo.md。
 
 import (
 	"errors"

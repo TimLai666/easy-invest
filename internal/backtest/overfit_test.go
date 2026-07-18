@@ -3,45 +3,28 @@ package backtest
 import (
 	"math"
 	"testing"
+
+	"github.com/HazelnutParadise/insyra/stats"
 )
 
 func approx(a, b, tol float64) bool { return math.Abs(a-b) <= tol }
 
-func TestNormHelpers(t *testing.T) {
-	if !approx(normCDF(0), 0.5, 1e-9) {
-		t.Fatalf("normCDF(0) = %v, want 0.5", normCDF(0))
+// 我們現在依賴 Insyra 的 stats.NormCDF/NormPPF（本專案 issue #176 上游實作），
+// 這裡做一次健全性檢查，確認上游行為符合預期。
+func TestInsyraNormHelpers(t *testing.T) {
+	if !approx(stats.NormCDF(0), 0.5, 1e-9) {
+		t.Fatalf("stats.NormCDF(0) = %v, want 0.5", stats.NormCDF(0))
 	}
-	if !approx(normCDF(1.96), 0.975, 1e-3) {
-		t.Fatalf("normCDF(1.96) = %v, want ~0.975", normCDF(1.96))
+	if !approx(stats.NormCDF(1.96), 0.975, 1e-3) {
+		t.Fatalf("stats.NormCDF(1.96) = %v, want ~0.975", stats.NormCDF(1.96))
 	}
-	if !approx(normPPF(0.5), 0, 1e-6) {
-		t.Fatalf("normPPF(0.5) = %v, want 0", normPPF(0.5))
+	ppf0, err := stats.NormPPF(0.5)
+	if err != nil || !approx(ppf0, 0, 1e-6) {
+		t.Fatalf("stats.NormPPF(0.5) = %v, err=%v, want 0", ppf0, err)
 	}
-	if !approx(normPPF(0.975), 1.959964, 1e-3) {
-		t.Fatalf("normPPF(0.975) = %v, want ~1.96", normPPF(0.975))
-	}
-}
-
-func TestChooseCombinationsCount(t *testing.T) {
-	if got := len(chooseCombinations(4, 2)); got != 6 {
-		t.Fatalf("C(4,2) = %d, want 6", got)
-	}
-	if got := len(chooseCombinations(10, 5)); got != 252 {
-		t.Fatalf("C(10,5) = %d, want 252", got)
-	}
-}
-
-func TestBlockBoundsCoverWholeLength(t *testing.T) {
-	bounds := blockBounds(23, 4)
-	if bounds[0] != 0 || bounds[len(bounds)-1] != 23 {
-		t.Fatalf("bounds 邊界錯誤：%v", bounds)
-	}
-	// 餘數分給前面幾段，段長差距不超過 1。
-	for b := 0; b < 4; b++ {
-		size := bounds[b+1] - bounds[b]
-		if size < 5 || size > 6 {
-			t.Fatalf("block %d 長度 %d，預期 5 或 6", b, size)
-		}
+	ppf975, err := stats.NormPPF(0.975)
+	if err != nil || !approx(ppf975, 1.959964, 1e-3) {
+		t.Fatalf("stats.NormPPF(0.975) = %v, err=%v, want ~1.96", ppf975, err)
 	}
 }
 
@@ -77,13 +60,13 @@ func TestPBOGuards(t *testing.T) {
 	if _, ok := ProbabilityOfBacktestOverfitting([][]float64{{0.1, 0.2}}, 2); ok {
 		t.Fatal("單一組合不該能算 PBO")
 	}
-	if _, ok := ProbabilityOfBacktestOverfitting([][]float64{{0.1}, {0.2}}, 3); ok {
+	if _, ok := ProbabilityOfBacktestOverfitting([][]float64{{0.1, -0.1}, {0.2, -0.2}}, 3); ok {
 		t.Fatal("奇數 blocks 應回 ok=false")
 	}
 }
 
 func TestDeflatedSharpeStrongPositiveIsSignificant(t *testing.T) {
-	// 平均 0.005、標準差 0.01 的對稱兩點序列：每期夏普 0.5。
+	// 平均 0.005、標準差約 0.01 的對稱兩點序列：每期夏普約 0.5。
 	returns := make([]float64, 60)
 	for i := range returns {
 		if i%2 == 0 {
